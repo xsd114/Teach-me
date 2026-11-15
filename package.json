@@ -1,0 +1,27 @@
+{
+  "name": "alp",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Teach me — 一个会教你的私人图书馆。本地优先，教材和讲解都由 AI 按你的水平写。",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:server": "pnpm --filter @alp/server dev",
+    "dev:web": "pnpm --filter @alp/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @alp/server db:migrate",
+    "build:electron": "node electron/build.mjs",
+    "dist": "node electron/build.mjs --pack",
+    "electron:dev": "electron electron/main.cjs"
+  },
+  "devDependencies": {
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2"
+  }
+}

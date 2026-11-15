@@ -1,0 +1,35 @@
+Teach me
+Third-party notices
+
+This project is MIT licensed. It builds on the following open-source works,
+whose licenses are acknowledged here in accordance with their terms.
+
+Runtime dependencies
+  Fastify                        MIT      https://github.com/fastify/fastify
+  React                          MIT      https://github.com/facebook/react
+  Vite                           MIT      https://github.com/vitejs/vite
+  Tailwind CSS                   MIT      https://github.com/tailwindlabs/tailwindcss
+  framer-motion                  MIT      https://github.com/framer/motion
+  Recharts                       MIT      https://github.com/recharts/recharts
+  lucide-react                   ISC      https://github.com/lucide-icons/lucide
+  sqlite-vec                     MIT/Apache-2.0  https://github.com/asg017/sqlite-vec
+  @huggingface/transformers      Apache-2.0      https://github.com/huggingface/transformers.js
+  onnxruntime-node               MIT      https://github.com/microsoft/onnxruntime
+  markitdown                     MIT      https://github.com/microsoft/markitdown
+  Electron                       MIT      https://github.com/electron/electron
+  electron-builder               MIT      https://github.com/electron-userland/electron-builder
+
+Models
+  bge-small-zh-v1.5              MIT      https://huggingface.co/BAAI/bge-small-zh-v1.5
+                                          (Beijing Academy of Artificial Intelligence)
+
+External services (called at runtime, not bundled)
+  DeepSeek                       https://www.deepseek.com/
+  MOSS                           https://platform.moss.cn/
+
+Prompt design credits
+  Mr.-Ranedeer-AI-Tutor          MIT      https://github.com/JushBJJ/Mr.-Ranedeer-AI-Tutor
+  education-agent-skills         see repo https://github.com/GarethManning/education-agent-skills
+
+For the full list of what was borrowed and from where, see the
+"站在谁的肩膀上" section in README.md.

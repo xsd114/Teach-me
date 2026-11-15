@@ -1,0 +1,42 @@
+node_modules/
+dist/
+dist-electron/
+release/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 运行时数据（用户数据默认放 E:/Teach me-data 或 %APPDATA%/Teach me）
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# 打包临时产物
+*.blockmap
+builder-debug.yml
+win-unpacked/
+
+# 备份
+_backup_*/
+*.bak
+# 内部开发文档，不进开源仓库
+TASKS.md
+docs/HANDOFF.md
+docs/_old_readme_backup.md
+
+# 开发过程截图（README 不引用，纯占体积）
+docs/*.png
+
+# 内部文档（且历史编码损坏）
+DECISIONS.md
+MAP.md

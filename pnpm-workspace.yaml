@@ -1,0 +1,18 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# pnpm 10.16+ 设置搬到这里（package.json 的 "pnpm" 字段已不再读取）
+#
+# 说明：pnpm 12 不再读 onlyBuiltDependencies，approve-builds 又是交互式的。
+# 这些包都是纯"链接预编译二进制"的 postinstall，跳过也能跑：
+#   esbuild / onnxruntime-node / protobufjs / sharp
+# 如果哪天真的缺二进制，把它们从下面移到 onlyBuiltDependencies（或跑 pnpm approve-builds）。
+allowBuilds:
+  '*': true
+
+ignoredBuiltDependencies:
+  - esbuild
+  - onnxruntime-node
+  - protobufjs
+  - sharp

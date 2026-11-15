@@ -1,0 +1,90 @@
+﻿  /* ── 学情访谈 ── */
+  onboardingStatus: (courseId: string) =>
+    req<{
+      ok: true
+      onboarded: boolean
+      profile: Profile | null
+      textbook: { id: string; status: string; progress: number; title: string } | null
+    }>(`/api/onboarding/status?courseId=${courseId}`),
+
+  onboardingStart: (courseId: string) =>
+    req<{ ok: true; interviewId: string; question: OnboardingQuestion; step: number; total: number }>(
+      '/api/onboarding/start',
+      { method: 'POST', body: JSON.stringify({ courseId }) },
+    ),
+
+  onboardingAnswer: (interviewId: string, questionId: string, answer: string) =>
+    req<{
+      ok: true
+      done: boolean
+      next: OnboardingQuestion | null
+      profile: Profile | null
+      step: number
+      total: number
+    }>('/api/onboarding/answer', {
+      method: 'POST',
+      body: JSON.stringify({ interviewId, questionId, answer }),
+    }),
+
+  /* ── 专属教材 ── */
+  textbook: (courseId: string) => req<{ ok: true; textbook: Textbook | null }>(`/api/textbook?courseId=${courseId}`),
+
+  buildTextbook: (courseId: string) =>
+    req<{ ok: true; textbookId: string }>('/api/textbook/build', {
+      method: 'POST',
+      body: JSON.stringify({ courseId }),
+    }),
+
+  deleteTextbook: (courseId: string) =>
+    req<{ ok: true; removed: number }>(`/api/textbook?courseId=${courseId}`, { method: 'DELETE' }),
+
+  rewriteChapter: (chapterId: string) =>
+    req<{ ok: true }>(`/api/textbook/${chapterId}/rewrite`, { method: 'POST', body: '{}' }),
+
+  textbookExportUrl: (id: string) => `/api/textbook/${id}/export`,
+}
+
+export type OnboardingQuestion = {
+  id: string
+  text: string
+  hint?: string
+  kind: 'choice' | 'text'
+  options?: { value: string; label: string; desc?: string }[]
+}
+
+export type Profile = {
+  familiarity: number
+  style: 'principle' | 'example' | 'hands-on'
+  support: 'handholding' | 'guided' | 'independent'
+  focus: string
+  notes: string[]
+  summary: string
+}
+
+export type TextbookChapter = {
+  id: string
+  orderIndex: number
+  title: string
+  summary: string
+  contentMd: string
+  goal: string
+  selfCheck: string
+  wordCount: number
+}
+
+export type Textbook = {
+  id: string
+  courseId: string
+  title: string
+  subtitle: string
+  preface: string
+  status: 'draft' | 'building' | 'ready' | 'failed'
+  stage: string
+  progress: number
+  error: string | null
+  profile: Profile | null
+  sources: string[]
+  createdAt: string
+  updatedAt: string
+  chapters: TextbookChapter[]
+}

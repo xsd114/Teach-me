@@ -1,0 +1,53 @@
+{
+  "appId": "com.teachme.app",
+  "productName": "Teach me",
+  "copyright": "MIT Licensed",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    {
+      "from": "dist-electron",
+      "to": ".",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "extraMetadata": {
+    "main": "main.cjs",
+    "author": "YG"
+  },
+  "npmRebuild": false,
+  "buildDependenciesFromSource": false,
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
+        "target": "zip",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Teach me",
+    "deleteAppDataOnUninstall": false,
+    "artifactName": "${productName}-${version}-setup.${ext}"
+  },
+  "asar": false,
+  "compression": "normal",
+  "publish": null
+}
