@@ -158,23 +158,36 @@ log(dllCopied ? '  + vendor/vec0.dll' : '  ! vec0.dll 没找到，打包版向�
 fs.copyFileSync(path.join(__dirname, 'main.cjs'), path.join(out, 'main.cjs'))
 log('主进程 → main.cjs')
 
-/* 4. package.json */
+/* 3.5 图标：窗口图标 + 托盘图标都从这里取（安装包图标由 builder.json 的 win.icon 指定） */
+const iconPng = path.join(root, 'build', 'icon.png')
+if (fs.existsSync(iconPng)) {
+  fs.copyFileSync(iconPng, path.join(out, 'icon.png'))
+  log('图标 → icon.png')
+} else {
+  log('  ! build/icon.png 不存在，先跑 python scripts/make-icon.py')
+}
+
+/* 4. package.json —— 版本号必须跟根目录一致
+   这里写成别的值，Electron 的 app.getVersion() 就会报那个值，
+   用户在「关于」里看到的版本和安装包名字对不上（v1.0 踩过） */
+const rootPkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 fs.writeFileSync(
   path.join(out, 'package.json'),
   JSON.stringify(
     {
-      name: 'alp',
-      productName: 'ALP',
-      version: '0.1.0',
-      description: 'ALP — AI Library Professor',
+      name: rootPkg.name ?? 'alp',
+      productName: 'Teach me',
+      version: rootPkg.version,
+      description: rootPkg.description ?? 'Teach me — 本地优先的 AI 私人教师',
       main: 'main.cjs',
       author: 'YG',
-      license: 'MIT',
+      license: rootPkg.license ?? 'MIT',
     },
     null,
     2,
   ),
 )
+log(`package.json → v${rootPkg.version}`)
 
 log('构建完成 →', out)
 

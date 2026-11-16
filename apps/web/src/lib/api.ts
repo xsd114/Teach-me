@@ -1,4 +1,15 @@
-﻿import type { Course, CreateCourseInput, CourseKind, Lesson, Material, SearchHit } from './types'
+import type { Course, CreateCourseInput, CourseKind, Lesson, Material, SearchHit } from './types'
+import type { TextAnchor } from './anchor'
+
+/** 贴在对话框上方、还没发出去的图（粘贴/上传/截图来的） */
+export type ChatImage = {
+  id: string
+  name: string
+  /** dataURL，直接能当 img.src */
+  dataUrl: string
+  w?: number
+  h?: number
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -374,7 +385,12 @@ export const api = {
   qaDeleteThread: (threadId: string) =>
     req<{ ok: true; removed: boolean }>(`/api/qa/threads/${threadId}`, { method: 'DELETE' }),
 
-  qaAsk: (question: string, courseId: string | null, threadId?: string | null, extra?: { context?: string; quote?: string }) =>
+  qaAsk: (
+    question: string,
+    courseId: string | null,
+    threadId?: string | null,
+    extra?: { context?: string; quote?: string; anchor?: TextAnchor | null },
+  ) =>
     req<{
       ok: true
       threadId: string
@@ -459,6 +475,8 @@ export type QaMessage = {
   role: string
   content: string
   citations: Citation[]
+  /** 这条消息带过的引用（引用原文 + 位置锚），刷新/全屏后还能还原 */
+  attach?: { quote?: string; anchor?: TextAnchor | null } | null
   createdAt: string
 }
 export type TeachLog = {
@@ -545,6 +563,21 @@ export const textbookApi = {
       body: JSON.stringify({ courseId }),
     }),
 
+  /** 写下一章。一次请求一章，done=true 表示整本写完 */
+  next: (id: string) =>
+    req<{
+      ok: true
+      done: boolean
+      chapterIndex: number
+      title: string
+      remaining: number
+      stage: string
+      progress: number
+    }>('/api/textbook/' + encodeURIComponent(id) + '/next', {
+      method: 'POST',
+      body: '{}',
+    }),
+
   remove: (courseId: string) =>
     req<{ ok: true; removed: number }>('/api/textbook?courseId=' + encodeURIComponent(courseId), {
       method: 'DELETE',
@@ -586,6 +619,8 @@ export type TextbookChapter = {
   selfCheck: string
   wordCount: number
   figures: unknown[]
+  /** pending 还没写 / writing 正在写 / done 写完 / failed 这次没写成 */
+  status?: 'pending' | 'writing' | 'done' | 'failed'
 }
 
 export type Textbook = {
@@ -696,10 +731,26 @@ export type ChapterInsert = {
 /* ---------------- 自习答疑 ---------------- */
 
 export const selfStudyApi = {
-  ask: (courseId: string, question: string, label?: string) =>
+  /**
+   * 自习问答。
+   *   courseId = null → 全部科目（跨库检索，没有教材编号可定位）
+   *   anchor        → 引用锚，带上就不用再问"你指的是哪一段"
+   */
+  ask: (
+    courseId: string | null,
+    question: string,
+    label?: string,
+    extra?: { anchor?: TextAnchor | null; quote?: string },
+  ) =>
     req<{ ok: true } & SelfStudyResult>('/api/selfstudy/ask', {
       method: 'POST',
-      body: JSON.stringify({ courseId, question, label }),
+      body: JSON.stringify({
+        courseId,
+        question,
+        label,
+        anchor: extra?.anchor ?? null,
+        quote: extra?.quote,
+      }),
     }),
 
   paragraphs: (courseId: string, chapterNo?: number) =>
@@ -745,6 +796,75 @@ export const mossApi = {
       '/api/moss/use-as-llm',
       { method: 'POST', body: '{}' },
     ),
+}
+
+export type LogFileInfo = { name: string; kind: string; bytes: number; mtime: string }
+
+export type DiagnosticsInfo = {
+  generatedAt: string
+  app: Record<string, string | number | boolean>
+  paths: Record<string, string>
+  db: { version: number; sizeBytes: number; counts: Record<string, number> }
+  model: Record<string, string | number | boolean>
+  voice: Record<string, string | boolean>
+  parse: Record<string, string | boolean>
+  vector: Record<string, string | number | boolean>
+  logs: { files: LogFileInfo[]; ringLines: number; errors: number }
+  problems: {
+    failedMaterials: { name: string; error: string }[]
+    teaching: string[]
+    recentErrors: string[]
+  }
+}
+
+/* ---------------- 日志与诊断 ---------------- */
+
+export const diagnosticsApi = {
+  /** 面板用：结构化摘要 + 日志文件清单 */
+  info: () =>
+    req<{ ok: true; info: DiagnosticsInfo; logsDir: string; files: LogFileInfo[] }>('/api/diagnostics'),
+
+  /** 生成一份 txt 落到 logs/，同时把全文带回来（前端直接下载） */
+  bundle: () =>
+    req<{ ok: true; filename: string; filePath: string; bytes: number; text: string }>(
+      '/api/diagnostics/bundle',
+      { method: 'POST', body: '{}' },
+    ),
+
+  files: () => req<{ ok: true; logsDir: string; files: LogFileInfo[] }>('/api/diagnostics/files'),
+
+  tail: (name: string, lines = 300) =>
+    req<{ ok: true; name: string; lines: number; body: string }>(
+      `/api/diagnostics/files/${encodeURIComponent(name)}?lines=${lines}`,
+    ),
+
+  clear: () =>
+    req<{ ok: true; removed: number; freedBytes: number }>('/api/diagnostics/clear', {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  openFolder: () =>
+    req<{ ok: true; path: string }>('/api/diagnostics/open-folder', { method: 'POST', body: '{}' }),
+
+  /** 前端报错回传；自己会吞掉异常，不许影响页面 */
+  clientError: async (payload: {
+    kind?: string
+    message: string
+    stack?: string
+    url?: string
+    at?: string
+  }) => {
+    try {
+      await fetch('/api/diagnostics/client-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, ua: navigator.userAgent }),
+      })
+    } catch {
+      /* 服务都没起来就算了 */
+    }
+  },
 }
 
 /* ---------------- 提示词 ---------------- */

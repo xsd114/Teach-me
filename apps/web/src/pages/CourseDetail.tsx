@@ -1,12 +1,8 @@
-﻿import { Modal } from '../components/Modal'
 import { MarksPanel } from '../components/MarksPanel'
-import { SelfStudyVoice } from '../components/SelfStudyVoice'
-import { SelfStudyChat } from '../components/SelfStudyChat'
 import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   ChevronLeft,
-  Mic,
   Brain,
   Maximize2,
   CheckCircle2,
@@ -68,9 +64,6 @@ export function CourseDetail({ course, onBack }: { course: Course; onBack: () =>
   const [loading, setLoading] = useState(true)
   const [teaching, setTeaching] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
-  const [selfStudy, setSelfStudy] = useState(false)
-  const [voiceMode, setVoiceMode] = useState(false)
-  const [chatMode, setChatMode] = useState(false)
 
   const [genBusy, setGenBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -194,11 +187,13 @@ export function CourseDetail({ course, onBack }: { course: Course; onBack: () =>
 
           <div className="flex shrink-0 items-center gap-3">
             <button
-              onClick={() => setSelfStudy(true)}
+              onClick={() =>
+                window.dispatchEvent(new CustomEvent('alp:open-study', { detail: { courseId: course.id } }))
+              }
               className="flex h-10 items-center gap-2 rounded-md border border-info/50 bg-info/10 px-4 text-sm font-medium text-info transition-colors hover:bg-info/20"
             >
               <Brain size={14} />
-              自习模式
+              自习问答
             </button>
             <button
               onClick={() => setTeaching(true)}
@@ -351,81 +346,6 @@ export function CourseDetail({ course, onBack }: { course: Course; onBack: () =>
         {tab === 'marks' && <MarksPanel courseId={course.id} />}
       </div>
 
-      <SelfStudyVoice courseId={course.id} open={voiceMode} onClose={() => setVoiceMode(false)} />
-      <SelfStudyChat
-        courseId={course.id}
-        open={chatMode}
-        onClose={() => setChatMode(false)}
-        chapterTitle={undefined}
-      />
-
-      {/* 自习模式入口选择 */}
-      <Modal
-        open={selfStudy}
-        onClose={() => setSelfStudy(false)}
-        title="自习模式"
-        subtitle="自己学，我在旁边待命"
-        width={540}
-        footer={
-          <button
-            onClick={() => setSelfStudy(false)}
-            className="ml-auto h-9 rounded-md border border-line bg-surface px-3 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
-          >
-            先不了
-          </button>
-        }
-      >
-        <div className="space-y-3">
-          <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-2xs leading-relaxed text-warn">
-            强烈建议您配置 MOSS 的语音模型！
-            <br />
-            官方地址：
-            <a
-              href="https://platform.moss.cn"
-              target="_blank"
-              rel="noreferrer"
-              className="underline hover:text-ink"
-            >
-              platform.moss.cn
-            </a>
-            　（不配就不出声。识别仍然能用，只是没有朗读）
-          </div>
-
-          <p className="text-xs leading-relaxed text-ink-dim">选一种自习方式：</p>
-
-            <button
-              onClick={() => {
-                setSelfStudy(false)
-                setChatMode(true)
-              }}
-              className="mt-2 flex w-full items-start gap-2.5 rounded-lg border border-line bg-surface-2 px-3.5 py-3 text-left transition-colors hover:border-line-strong hover:bg-surface-3"
-            >
-              <BookOpen size={15} className="mt-0.5 shrink-0 text-accent" />
-              <span>
-                <span className="block text-sm text-ink">文本模式</span>
-                <span className="mt-0.5 block text-2xs leading-relaxed text-ink-mute">
-                  打字问，能传图和截图；回答右下角可存进错题本或记忆库
-                </span>
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                setSelfStudy(false)
-                setVoiceMode(true)
-              }}
-              className="mt-2 flex w-full items-start gap-2.5 rounded-lg border border-line bg-surface-2 px-3.5 py-3 text-left transition-colors hover:border-line-strong hover:bg-surface-3"
-            >
-              <Mic size={15} className="mt-0.5 shrink-0 text-info" />
-              <span>
-                <span className="block text-sm text-ink">语音模式</span>
-                <span className="mt-0.5 block text-2xs leading-relaxed text-ink-mute">
-                  说话提问，它查教材后念给你听；用浏览器自带识别，不额外花钱
-                </span>
-              </span>
-            </button>
-          </div>
-        </Modal>
     </div>
   )
 }

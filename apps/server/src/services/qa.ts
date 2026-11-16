@@ -1,9 +1,10 @@
-﻿import { all, one, run } from '../db/index.js'
+import { all, one, run } from '../db/index.js'
 import { newId, nowIso } from '../lib/id.js'
 import { clampText } from '../lib/verbosity.js'
 import { chat } from './llm.js'
 import { hybridSearch, type Hit } from './search.js'
 import { getCourse } from './course.js'
+import { renderAnchor, resolveAnchor, type AnchorInput } from '../lib/anchor.js'
 
 
 export type Citation = {
@@ -64,6 +65,8 @@ export function threadMessages(threadId: string): {
   role: string
   content: string
   citations: Citation[]
+  /** 引用锚（划词问过的、引用过的位置信息），没有就是 null */
+  attach: { quote?: string; anchor?: AnchorInput | null } | null
   createdAt: string
 }[] {
   const rows = all<{
@@ -71,16 +74,30 @@ export function threadMessages(threadId: string): {
     role: string
     content: string
     citations_json: string
+    attach_json: string
     created_at: string
-  }>(`SELECT id, role, content, citations_json, created_at FROM qa_message WHERE thread_id = ? ORDER BY created_at`, threadId)
+  }>(
+    `SELECT id, role, content, citations_json, attach_json, created_at
+       FROM qa_message WHERE thread_id = ? ORDER BY created_at`,
+    threadId,
+  )
   return rows.map((r) => {
     let citations: Citation[] = []
+    let attach: { quote?: string; anchor?: AnchorInput | null } | null = null
     try {
       citations = JSON.parse(r.citations_json)
     } catch {
       citations = []
     }
-    return { id: r.id, role: r.role, content: r.content, citations, createdAt: r.created_at }
+    try {
+      const raw = r.attach_json ? JSON.parse(r.attach_json) : null
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        if (raw.quote || raw.anchor) attach = raw
+      }
+    } catch {
+      attach = null
+    }
+    return { id: r.id, role: r.role, content: r.content, citations, attach, createdAt: r.created_at }
   })
 }
 
@@ -101,6 +118,8 @@ export async function ask(input: {
   context?: string
   /** 划词问答：被选中的那段原话 */
   quote?: string
+  /** 文本定位锚：用户选中的话在教材里的精确坐标（第几章、第几段、第几个字） */
+  anchor?: AnchorInput | null
 }): Promise<AskResult> {
   const t0 = Date.now()
   const courseId = input.courseId && input.courseId !== 'null' ? input.courseId : null
@@ -136,6 +155,13 @@ export async function ask(input: {
   const passage = (input.context ?? '').trim()
   const quote = (input.quote ?? '').trim()
 
+  // 文本定位锚：有坐标就把教材里的原段翻出来，模型不用猜"这句在哪"
+  const anchor = input.anchor ?? null
+  const resolved = anchor ? resolveAnchor(courseId, anchor) : null
+  const anchorBlock = anchor
+    ? renderAnchor(anchor, resolved ? `【这一段在教材里的原文】${resolved.text}` : '')
+    : ''
+
   const passageBlock = passage
     ? `【学生正在读的原文段落（他选中的部分已用 ≪≫ 标出）】\n${passage}\n\n`
     : quote
@@ -151,8 +177,8 @@ export async function ask(input: {
     {
       role: 'user' as const,
       content: ctx
-        ? `${passageBlock}资料片段：\n${ctx}\n\n${questionBlock}\n\n请优先结合"学生正在读的原文段落"来回答；需要补充时再用资料片段，标出编号。`
-        : `${passageBlock}资料库里没有额外检索到相关内容。\n\n${questionBlock}\n\n请优先结合"学生正在读的原文段落"回答；确实没有依据就说清楚，再用你自己的知识补充。`,
+        ? `${anchorBlock ? anchorBlock + '\n\n' : ''}${passageBlock}资料片段：\n${ctx}\n\n${questionBlock}\n\n请优先结合"学生正在读的原文段落"来回答；需要补充时再用资料片段，标出编号。`
+        : `${anchorBlock ? anchorBlock + '\n\n' : ''}${passageBlock}资料库里没有额外检索到相关内容。\n\n${questionBlock}\n\n请优先结合"学生正在读的原文段落"回答；确实没有依据就说清楚，再用你自己的知识补充。`,
     },
   ]
 
@@ -175,10 +201,13 @@ export async function ask(input: {
 
   run(
     `INSERT INTO qa_message(id, thread_id, role, content, citations_json, attach_json, created_at)
-     VALUES (?,?, 'user', ?, '[]', '[]', ?)`,
+     VALUES (?,?, 'user', ?, '[]', ?, ?)`,
     newId('qam'),
     threadId,
     input.question,
+    quote || anchor
+      ? JSON.stringify({ quote: quote || anchor?.quote || '', anchor: anchor ?? null })
+      : '[]',
     nowIso(),
   )
 

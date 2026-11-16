@@ -134,7 +134,13 @@ async function main() {
   }
 
   if (EVAL) {
-    await send('Runtime.evaluate', { expression: EVAL, returnByValue: true, awaitPromise: true }, sessionId)
+    const r = await send('Runtime.evaluate', { expression: EVAL, returnByValue: true, awaitPromise: true }, sessionId)
+    // 把 eval 的返回值打出来：脚本没跑到想去的页面时，一眼能看出卡在哪一步
+    if (r?.exceptionDetails) {
+      console.error('EVAL 抛错：', r.exceptionDetails.text, r.exceptionDetails.exception?.description ?? '')
+    } else if (r?.result?.value !== undefined) {
+      console.log(`EVAL → ${JSON.stringify(r.result.value)}`)
+    }
     await sleep(400)
   }
 

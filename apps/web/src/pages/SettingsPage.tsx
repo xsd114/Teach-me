@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Volume2,
   FileText,
@@ -11,8 +11,13 @@ import {
   Database,
   Info,
   RotateCcw,
+  Download,
+  Copy,
+  Trash2,
+  AlertTriangle,
+  ChevronDown,
 } from 'lucide-react'
-import { api, mossApi } from '../lib/api'
+import { api, mossApi, diagnosticsApi, type DiagnosticsInfo, type LogFileInfo } from '../lib/api'
 import { WelcomeEntry, WelcomeModal } from '../components/WelcomeModal'
 import {
   loadRadialConfig,
@@ -23,6 +28,7 @@ import {
   COLOR_META,
 } from '../components/RadialMark'
 import { PromptSettings } from '../components/PromptSettings'
+import { downloadText } from '../lib/download'
 import {
   asrSupported,
   loadVoiceSettings,
@@ -629,12 +635,12 @@ function AboutPanel() {
       <WelcomeEntry onOpen={() => setWelcome(true)} />
 
       <div className="flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-accent text-lg font-bold text-accent-fg">
-          A
+        <div className="h-12 w-12 overflow-hidden rounded-lg border border-line-strong/60 bg-surface-2">
+          <img src="/icon-256.png" alt="Teach me" className="h-full w-full object-cover" />
         </div>
         <div>
-          <div className="text-base font-semibold text-ink">ALP · AI Library Professor</div>
-          <div className="text-2xs text-ink-mute">v{info?.version ?? '0.1.0'} · MIT</div>
+          <div className="text-base font-semibold text-ink">Teach me · 你的私人教师</div>
+          <div className="text-2xs text-ink-mute">v{info?.version ?? '…'} · MIT</div>
         </div>
       </div>
 
@@ -660,7 +666,301 @@ function AboutPanel() {
           第三方许可见仓库根目录 NOTICE。MinerU 未包含在本项目中。
         </span>
       </div>
+
+      <DiagnosticsPanel />
+
       <WelcomeModal open={welcome} onClose={() => setWelcome(false)} />
+    </div>
+  )
+}
+
+/* ───────────────────────── 日志与诊断 ───────────────────────── */
+
+function HumanBytes({ n }: { n: number }) {
+  if (!Number.isFinite(n)) return <>—</>
+  const units = ['B', 'KB', 'MB', 'GB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i += 1
+  }
+  return <>{`${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`}</>
+}
+
+/**
+ * 出问题时的出口。
+ *
+ * 用户原话：「软件出错了就可以直接导出日志找问题」——所以这里的主按钮只有两个：
+ * 生成并导出、打开日志目录。其余（复制、清空、预览）是给会看日志的人留的。
+ */
+function DiagnosticsPanel() {
+  const [info, setInfo] = useState<DiagnosticsInfo | null>(null)
+  const [logsDir, setLogsDir] = useState('')
+  const [files, setFiles] = useState<LogFileInfo[]>([])
+  const [busy, setBusy] = useState<'bundle' | 'copy' | 'clear' | 'refresh' | null>(null)
+  const [msg, setMsg] = useState('')
+  const [savedPath, setSavedPath] = useState('')
+  const [preview, setPreview] = useState<{ name: string; body: string } | null>(null)
+  const [openList, setOpenList] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const r = await diagnosticsApi.info()
+      setInfo(r.info)
+      setLogsDir(r.logsDir)
+      setFiles(r.files)
+    } catch (e) {
+      setMsg(e instanceof Error ? `读不到诊断信息：${e.message}` : '读不到诊断信息')
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const makeBundle = async () => {
+    const r = await diagnosticsApi.bundle()
+    setSavedPath(r.filePath)
+    return r
+  }
+
+  const exportBundle = async () => {
+    setBusy('bundle')
+    setMsg('')
+    try {
+      const r = await makeBundle()
+      downloadText(r.filename, r.text)
+      setMsg(`已生成 ${r.filename}（${Math.round(r.bytes / 1024)} KB），下载也开始了`)
+      await load()
+    } catch (e) {
+      setMsg(e instanceof Error ? `生成失败：${e.message}` : '生成失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const copyBundle = async () => {
+    setBusy('copy')
+    setMsg('')
+    try {
+      const r = await makeBundle()
+      await navigator.clipboard?.writeText(r.text)
+      setMsg('诊断信息已复制到剪贴板，直接粘到聊天/issue 里就行')
+      await load()
+    } catch (e) {
+      setMsg(e instanceof Error ? `复制失败：${e.message}` : '复制失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const clearLogs = async () => {
+    if (!window.confirm('清空所有日志文件？正在写的当天日志会保留。清空前建议先导出一次。')) return
+    setBusy('clear')
+    try {
+      const r = await diagnosticsApi.clear()
+      setMsg(`已删除 ${r.removed} 个日志文件，释放 ${Math.round(r.freedBytes / 1024)} KB`)
+      setPreview(null)
+      await load()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '清空失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const errors = info?.problems.recentErrors.length ?? 0
+  const failed = info?.problems.failedMaterials.length ?? 0
+
+  return (
+    <Section title="日志与诊断" hint="出问题时点这里，把生成的文件发给我">
+      <div className="rounded-lg border border-line bg-surface px-3.5 py-3">
+        <p className="text-2xs leading-relaxed text-ink-dim">
+          会打包这些东西：版本 / 系统 / 数据库状态 / 资料与标记数量 / 模型配置（
+          <span className="text-ok">Key 已脱敏</span>）/ 解析器探测 / 向量索引状态 / 最近 1500 行日志 / 前端报错。
+          <br />
+          不含你的教材正文、聊天内容和任何 API Key。生成的是纯文本，直接发给我或贴进 issue 都行。
+        </p>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => void exportBundle()}
+            disabled={busy !== null}
+            className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-50"
+          >
+            {busy === 'bundle' ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            生成并导出日志
+          </button>
+          <button
+            onClick={() => void copyBundle()}
+            disabled={busy !== null}
+            className="flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface-2 px-3 text-xs text-ink-dim transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-50"
+          >
+            {busy === 'copy' ? <Loader2 size={13} className="animate-spin" /> : <Copy size={13} />}
+            复制诊断信息
+          </button>
+          <button
+            onClick={() => void diagnosticsApi.openFolder().catch(() => setMsg('打不开目录，手动去吧：' + logsDir))}
+            className="flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface-2 px-3 text-xs text-ink-dim transition-colors hover:bg-surface-3 hover:text-ink"
+          >
+            <FolderOpen size={13} />
+            打开日志目录
+          </button>
+          <button
+            onClick={() => void clearLogs()}
+            disabled={busy !== null}
+            className="ml-auto flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-xs text-ink-mute transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-50"
+          >
+            <Trash2 size={12} />
+            清空日志
+          </button>
+        </div>
+
+        {msg && <p className="mt-2 text-2xs leading-relaxed text-ink-dim">{msg}</p>}
+        {savedPath && (
+          <p className="mt-1 font-mono text-[10px] break-all text-ink-mute">{savedPath}</p>
+        )}
+
+        {/* 现在的状态：有错就直接顶到眼前，不用去翻日志 */}
+        <div className="mt-3 grid gap-1.5 text-2xs sm:grid-cols-2">
+          <StatusRow
+            tone={errors > 0 ? 'warn' : 'ok'}
+            label="最近的错误 / 警告"
+            value={errors > 0 ? `${errors} 条` : '干净'}
+          />
+          <StatusRow
+            tone={failed > 0 ? 'warn' : 'ok'}
+            label="解析失败的资料"
+            value={failed > 0 ? `${failed} 份` : '没有'}
+          />
+          <StatusRow label="日志目录" value={logsDir || '…'} mono />
+          <StatusRow
+            label="日志文件"
+            value={files.length ? `${files.length} 个 · 共 ${Math.round(files.reduce((n, f) => n + f.bytes, 0) / 1024)} KB` : '还没有'}
+          />
+        </div>
+
+        {errors > 0 && info && (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-2xs text-warn hover:underline">
+              <AlertTriangle size={10} className="mr-1 inline" />
+              看看是哪几条
+            </summary>
+            <pre className="mt-1 max-h-32 overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-ink-mute">
+              {info.problems.recentErrors.join('\n')}
+            </pre>
+          </details>
+        )}
+
+        {failed > 0 && info && (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-2xs text-warn hover:underline">哪几份资料解析失败了</summary>
+            <ul className="mt-1 space-y-0.5 text-[10px] leading-relaxed text-ink-mute">
+              {info.problems.failedMaterials.map((m) => (
+                <li key={m.name}>
+                  · {m.name} → {m.error}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
+        {/* 日志文件列表 + 尾巴预览 */}
+        <div className="mt-3">
+          <button
+            onClick={() => setOpenList((v) => !v)}
+            className="flex items-center gap-1 text-2xs text-ink-mute transition-colors hover:text-ink"
+          >
+            <ChevronDown size={10} className={`transition-transform ${openList ? '' : '-rotate-90'}`} />
+            日志与诊断文件（{files.length}）
+          </button>
+          {openList && (
+            <div className="mt-1.5 max-h-52 space-y-1 overflow-y-auto">
+              {files.length === 0 && (
+                <p className="text-2xs text-ink-mute">还没有日志文件。日志从 v1.2 起会自动写到这里。</p>
+              )}
+              {files.map((f) => (
+                <div
+                  key={f.name}
+                  className="flex items-center gap-2 rounded-md border border-line bg-surface-2/60 px-2.5 py-1.5"
+                >
+                  <FileText size={11} className="shrink-0 text-ink-mute" />
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await diagnosticsApi.tail(f.name, 200)
+                        setPreview({ name: f.name, body: r.body || '（空）' })
+                      } catch {
+                        setPreview({ name: f.name, body: '读不出来' })
+                      }
+                    }}
+                    className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-ink-dim hover:text-accent"
+                    title="点开看最后 200 行"
+                  >
+                    {f.name}
+                  </button>
+                  <span className="shrink-0 text-[10px] text-ink-mute">
+                    <HumanBytes n={f.bytes} />
+                  </span>
+                  <span className="shrink-0 text-[10px] text-ink-mute">
+                    {new Date(f.mtime).toLocaleString('zh-CN', {
+                      month: 'numeric',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {preview && (
+          <div className="mt-2">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="truncate font-mono text-[11px] text-ink-dim">{preview.name}</span>
+              <button
+                onClick={() => setPreview(null)}
+                className="ml-auto text-2xs text-ink-mute hover:text-ink"
+              >
+                收起
+              </button>
+            </div>
+            <pre className="max-h-64 overflow-auto rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-ink-mute">
+              {preview.body}
+            </pre>
+          </div>
+        )}
+      </div>
+    </Section>
+  )
+}
+
+function StatusRow({
+  label,
+  value,
+  tone = 'ok',
+  mono,
+}: {
+  label: string
+  value: string
+  tone?: 'ok' | 'warn'
+  mono?: boolean
+}) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone === 'warn' ? 'bg-warn' : 'bg-ok'}`} />
+      <span className="shrink-0 text-ink-mute">{label}</span>
+      <span
+        className={`min-w-0 flex-1 truncate text-right ${mono ? 'font-mono text-[10px]' : ''} ${
+          tone === 'warn' ? 'text-warn' : 'text-ink-dim'
+        }`}
+        title={value}
+      >
+        {value}
+      </span>
     </div>
   )
 }

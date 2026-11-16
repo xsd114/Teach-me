@@ -1,8 +1,12 @@
-﻿import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Highlighter, MessageSquarePlus, X, GripVertical, Save, Loader2, Trash2, Wand2, ChevronDown, Quote } from 'lucide-react'
+import {
+  Highlighter, MessageSquarePlus, X, GripVertical, Save, Loader2, Trash2, Wand2, ChevronDown, Quote, Maximize2,
+} from 'lucide-react'
 import { annotationApi, api, type Annotation, type QaMessage } from '../lib/api'
 import { MiniMarkdown } from './MiniMarkdown'
+import { QuoteChip } from './Composer'
+import { anchorFromRange, anchorLabel, type TextAnchor } from '../lib/anchor'
 
 /* ============================================================
    划词菜单：选中一段文字后浮出来
@@ -34,6 +38,8 @@ export type SelectionPayload = {
   x: number
   y: number
   sourceId: string | null
+  /** 文本定位锚：第几章、第几段、段内第几个字（跟着问题一起发给模型） */
+  anchor: TextAnchor
 }
 
 export function useSelectionMenu(enabled = true) {
@@ -79,6 +85,8 @@ export function useSelectionMenu(enabled = true) {
           y: rect.top,
           sourceId: (range.startContainer.parentElement?.closest('[data-source-id]') as HTMLElement | null)?.dataset
             .sourceId ?? null,
+          // 位置锚：选中时就算好，后面不管走「问 AI」「引用」还是「全屏」都带着它
+          anchor: anchorFromRange(range, text),
         })
       }, 10)
     }
@@ -117,7 +125,8 @@ export function SelectionMenu({
   onHighlighted: (a: Annotation) => void
   onGrow: (sel: SelectionPayload) => void
   mode?: 'chat' | 'teach'
-  onQuote?: (text: string) => void
+  /** teach 模式：把这段（连同位置锚）放到输入框上方当引用 */
+  onQuote?: (sel: SelectionPayload) => void
 }) {
   const [busy, setBusy] = useState(false)
   const [growing, setGrowing] = useState(false)
@@ -163,7 +172,7 @@ export function SelectionMenu({
           <div className="h-4 w-px bg-line-strong" />
           {mode === 'teach' ? (
             <button
-              onClick={() => onQuote?.(sel.text)}
+              onClick={() => onQuote?.(sel)}
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-ink-dim transition-colors hover:bg-surface-2 hover:text-ink"
             >
               <Quote size={12} />
@@ -206,16 +215,22 @@ export function SelectionMenu({
 export function AskDrawer({
   open,
   quote,
+  anchor,
   context,
   courseId,
   onClose,
+  onFullscreen,
 }: {
   open: boolean
   quote: string
+  /** 选中那段话的位置锚（第几章、第几段、段内偏移） */
+  anchor?: TextAnchor | null
   /** 选中处前后各约 1000 字，一起发给 AI；界面上不显示 */
   context: string
   courseId: string
   onClose: () => void
+  /** 右上角「全屏」：带着这条线程和引用，去自习问答页接着聊 */
+  onFullscreen?: (payload: { threadId: string | null; quote: TextAnchor | null; context: string }) => void
 }) {
   const [width, setWidth] = useState(400)
   const [messages, setMessages] = useState<QaMessage[]>([])
@@ -226,6 +241,8 @@ export function AskDrawer({
   const [err, setErr] = useState<string | null>(null)
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const quoteAnchor: TextAnchor | null = anchor ?? (quote ? { kind: 'unknown', quote } : null)
 
   // 换了引用就重置
   useEffect(() => {
@@ -268,7 +285,11 @@ export function AskDrawer({
       { id: `u${Date.now()}`, role: 'user', content: q, citations: [], createdAt: new Date().toISOString() },
     ])
     try {
-      const r = await api.qaAsk(q, courseId, threadId, { context, quote })
+      const r = await api.qaAsk(q, courseId, threadId, {
+        context,
+        quote,
+        anchor: quoteAnchor,
+      })
       setThreadId(r.threadId)
       setMessages((m) => [
         ...m,
@@ -323,6 +344,14 @@ export function AskDrawer({
             <span className="text-xs font-medium text-ink">就这段问 AI</span>
             <div className="ml-auto flex items-center gap-1">
               <button
+                onClick={() => onFullscreen?.({ threadId, quote: quoteAnchor, context })}
+                title="切到自习问答页，接着这段继续聊（对话记录会带过去）"
+                className="flex h-7 items-center gap-1 rounded-md px-2 text-2xs text-ink-dim transition-colors hover:bg-surface-2 hover:text-ink"
+              >
+                <Maximize2 size={10} />
+                全屏
+              </button>
+              <button
                 onClick={saveToMemory}
                 disabled={!threadId || saved}
                 title={saved ? '已存进记忆库待处理' : '把这轮对话存进记忆库，供之后教学用'}
@@ -343,9 +372,15 @@ export function AskDrawer({
             </div>
           </div>
 
-          {/* 引用 */}
-          <div className="shrink-0 border-b border-line bg-accent-soft/30 px-3 py-2">
-            <div className="line-clamp-3 text-2xs leading-relaxed text-ink-dim">「{quote}」</div>
+          {/* 引用：QQ 那样的一条，位置信息藏在下面不显示 */}
+          <div className="shrink-0 border-b border-line px-3 py-2">
+            <QuoteChip anchor={quoteAnchor} tone="info" />
+            {anchorLabel(quoteAnchor) && (
+              <div className="mt-1 text-[10px] text-ink-mute">
+                位置已记下：{anchorLabel(quoteAnchor)}
+                <span className="opacity-60">（会随问题一起发给 AI，你不用再说是哪一段）</span>
+              </div>
+            )}
           </div>
 
           {/* 对话 */}

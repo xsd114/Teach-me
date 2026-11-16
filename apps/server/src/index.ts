@@ -1,4 +1,4 @@
-﻿import path from 'node:path'
+import path from 'node:path'
 import Fastify, { type FastifyError } from 'fastify'
 import {
   ALP_HOME,
@@ -7,6 +7,7 @@ import {
   APP_VERSION,
   DB_PATH,
   IS_DEV,
+  LOGS_DIR,
   ensureDirs,
 } from './config.js'
 import { closeDb, getDb } from './db/index.js'
@@ -25,9 +26,13 @@ import { liveRoutes, selfStudyRoutes } from './routes/live.js'
 import { ttsRoutes } from './routes/tts.js'
 import { promptRoutes } from './routes/prompts.js'
 import { mistakeRoutes } from './routes/mistakes.js'
+import { diagnosticsRoutes } from './routes/diagnostics.js'
+import { startFileLogging } from './lib/logfile.js'
 
 async function main(): Promise<void> {
   ensureDirs()
+  // 越早越好：后面的启动日志也要落盘，不然用户报「打不开」时什么都没有
+  startFileLogging()
 
   const app = Fastify({
     // 不用 pino-pretty：它走的是"运行时按模块名解析"的 transport 机制，
@@ -67,6 +72,7 @@ async function main(): Promise<void> {
   await app.register(ttsRoutes)
   await app.register(promptRoutes)
   await app.register(mistakeRoutes)
+  await app.register(diagnosticsRoutes)
 
   // 生产模式（Electron 打包后）：后端同时托管前端静态文件
   if (!IS_DEV) {
@@ -94,12 +100,13 @@ async function main(): Promise<void> {
   process.stdout.write(
     [
       '',
-      `  ALP · AI Library Professor  v${APP_VERSION}`,
+      `  Teach me · 你的私人教师  v${APP_VERSION}`,
       line,
       `  服务   http://${API_HOST}:${API_PORT}`,
       `  界面   http://127.0.0.1:5273   (pnpm dev:web)`,
       `  数据   ${ALP_HOME}`,
       `  数据库 ${DB_PATH}  (schema v${dbv}, ping ${dbOk}ms)`,
+      `  日志   ${LOGS_DIR}  （出错时：设置 → 关于 → 生成日志）`,
       `  环境   ${IS_DEV ? 'development' : 'production'} · Node ${process.version}`,
       line,
       '',

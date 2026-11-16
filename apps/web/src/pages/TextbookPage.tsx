@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   BookOpen,
@@ -25,9 +25,9 @@ import {
   InsertBlock,
 } from '../components/Selection'
 import { annotationApi, growApi, type Annotation, type ChapterInsert } from '../lib/api'
-import { SelfStudyChat } from '../components/SelfStudyChat'
-import { ParaBadge } from '../components/SelfStudyPanel'
+import { ParaBadge } from '../components/ParaBadge'
 import { BookMarked } from 'lucide-react'
+import type { TextAnchor } from '../lib/anchor'
 
 export function TextbookPage({
   courseId,
@@ -47,7 +47,7 @@ export function TextbookPage({
   const [err, setErr] = useState<string | null>(null)
   const [anns, setAnns] = useState<Annotation[]>([])
   const [recolorAt, setRecolorAt] = useState<{ annId: string; x: number; y: number } | null>(null)
-  const [askSel, setAskSel] = useState<{ text: string; context: string } | null>(null)
+  const [askSel, setAskSel] = useState<{ text: string; context: string; anchor: TextAnchor | null } | null>(null)
   const [inserts, setInserts] = useState<Record<string, ChapterInsert[]>>({})
   const [, setGrowingId] = useState<string | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -55,9 +55,7 @@ export function TextbookPage({
   const fullscreen = fsProp ?? false
   const setFullscreen = (v: boolean) => onFullscreenChange?.(v)
   const [scrollPct, setScrollPct] = useState(0)
-  const [selfStudyNote, setSelfStudyNote] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [selfPanel, setSelfPanel] = useState(false)
   const [width, setWidth] = useState(() => {
     const v = Number(localStorage.getItem('alp.textbookWidth'))
     return Number.isFinite(v) && v >= 520 && v <= 1600 ? v : 900
@@ -122,6 +120,32 @@ export function TextbookPage({
     return () => clearInterval(t)
   }, [book?.status, load])
 
+  // 生成中：一章一个请求往下推。中途关掉/刷新页面也没关系，
+  // 回到这页会从这里接着写（后端按章节 pending 状态记账）。
+  useEffect(() => {
+    const b = book
+    if (!b || b.status !== 'building') return
+    let alive = true
+    const drive = async () => {
+      for (let i = 0; i < 80 && alive; i++) {
+        try {
+          const r = await textbookApi.next(b.id)
+          if (r.done) break
+        } catch {
+          // 这一章没写成：歇一下继续推下一章，别把循环打死
+          await new Promise((res) => setTimeout(res, 4000))
+        }
+        if (!alive) return
+        await load()
+      }
+      if (alive) await load()
+    }
+    void drive()
+    return () => {
+      alive = false
+    }
+  }, [book?.id, book?.status, load])
+
   const rebuild = async () => {
     setBusy(true)
     setErr(null)
@@ -169,7 +193,9 @@ export function TextbookPage({
             <span className="tabular-nums">{book.progress}%</span>
           </div>
         </div>
-        <p className="text-xs text-ink-mute">正在写第 {book.chapters.length || 0} 章…</p>
+        <p className="text-xs text-ink-mute">
+          已写好 {book.chapters.filter((c) => c.status === 'done').length}/{book.chapters.length || 0} 章，一章一个请求，可以关掉页面回头接着写
+        </p>
       </div>
     )
   }
@@ -235,7 +261,13 @@ export function TextbookPage({
               </div>
             )}
 
-            <div data-source-id={ch.id} className="leading-[1.9]">
+            <div
+              data-source-id={ch.id}
+              data-source-kind="chapter"
+              data-chapter-no={ch.orderIndex + 1}
+              data-chapter-title={ch.title}
+              className="leading-[1.9]"
+            >
               {paras.map((para, pi) => (
                 <div key={pi} data-para={pi} className="relative pr-12">
                   <ParaBadge label={'A' + (ch.orderIndex + 1) + '-' + (pi + 1)} />
@@ -254,11 +286,13 @@ export function TextbookPage({
         {/* 顶部浮动控件 */}
         <div className="absolute top-4 right-4 flex items-center gap-2">
           <button
-            onClick={() => setSelfStudyNote(true)}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('alp:open-study', { detail: { courseId } }))
+            }}
             className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-surface/90 px-2.5 text-2xs text-ink-dim backdrop-blur hover:text-ink"
           >
             <Brain size={11} />
-            自习模式
+            自习问答
           </button>
           <button
             onClick={() => setFullscreen(false)}
@@ -337,18 +371,6 @@ export function TextbookPage({
 
       {/* 正文 */}
       <div className="min-w-0 flex-1 overflow-y-auto px-2">
-        {selfStudyNote && (
-          <div className="mb-3 flex items-start gap-2 rounded-md border border-accent/40 bg-accent-soft px-3 py-2 text-2xs leading-relaxed text-accent">
-            <Brain size={11} className="mt-0.5 shrink-0" />
-            <span className="flex-1">
-              自习模式的规则你还没定 —— 现在先占个位子。等你说清楚它该做什么（比如关掉讲解、只留图和自检、或者按番茄钟计时），我再接上。
-            </span>
-            <button onClick={() => setSelfStudyNote(false)} className="shrink-0 hover:text-ink">
-              知道了
-            </button>
-          </div>
-        )}
-
         {err && (
           <div className="mb-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
             {err}
@@ -409,7 +431,15 @@ export function TextbookPage({
               </div>
             )}
 
-            <div ref={bodyRef} data-source-id={ch.id} className="mx-auto w-full px-8 leading-[1.9]" style={{ maxWidth: width }}>
+            <div
+              ref={bodyRef}
+              data-source-id={ch.id}
+              data-source-kind="chapter"
+              data-chapter-no={ch.orderIndex + 1}
+              data-chapter-title={ch.title}
+              className="mx-auto w-full px-8 leading-[1.9]"
+              style={{ maxWidth: width }}
+            >
               {(() => {
                 const paras = ch.contentMd.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean)
                 const list = inserts[ch.id] ?? []
@@ -502,21 +532,18 @@ export function TextbookPage({
         )}
       </div>
 
-      {/* 自习答疑浮动入口 */}
+      {/* 自习入口：现在统一去「自习问答」页（原来是个浮层） */}
       <button
-        onClick={() => setSelfPanel(true)}
+        onClick={() => {
+          window.dispatchEvent(
+            new CustomEvent('alp:open-study', { detail: { courseId } }),
+          )
+        }}
         className="fixed right-6 bottom-6 z-30 flex h-11 items-center gap-2 rounded-full bg-accent px-4 text-xs font-medium text-accent-fg shadow-xl transition-transform hover:scale-[1.03]"
       >
         <BookMarked size={14} />
-        自习答疑
+        自习问答
       </button>
-
-      <SelfStudyChat
-        courseId={courseId}
-        open={selfPanel}
-        onClose={() => setSelfPanel(false)}
-        chapterTitle={book?.chapters[active]?.title}
-      />
 
       <RecolorPopover
         at={recolorAt ? { x: recolorAt.x, y: recolorAt.y } : null}
@@ -535,7 +562,11 @@ export function TextbookPage({
         sel={sel}
         courseId={courseId}
         onAsk={(s) => {
-          setAskSel({ text: s.text, context: `...${s.contextBefore}≪${s.text}≫${s.contextAfter}...` })
+          setAskSel({
+            text: s.text,
+            context: `...${s.contextBefore}≪${s.text}≫${s.contextAfter}...`,
+            anchor: s.anchor,
+          })
           clear()
         }}
         onGrow={async (s) => {
@@ -568,8 +599,17 @@ export function TextbookPage({
       <AskDrawer
         open={Boolean(askSel)}
         quote={askSel?.text ?? ''}
+        anchor={askSel?.anchor ?? null}
         context={askSel?.context ?? ''}
         courseId={courseId}
+        onFullscreen={({ threadId, quote, context }) => {
+          setAskSel(null)
+          window.dispatchEvent(
+            new CustomEvent('alp:ask-fullscreen', {
+              detail: { threadId, courseId, quote, context },
+            }),
+          )
+        }}
         onClose={() => {
           setAskSel(null)
           void loadAnns()

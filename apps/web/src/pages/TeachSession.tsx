@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChevronLeft,
@@ -19,6 +19,8 @@ import {
 import { api, type TeachIntent, type TeachStep } from '../lib/api'
 import { MiniMarkdown } from '../components/MiniMarkdown'
 import { SelectionMenu, useSelectionMenu } from '../components/Selection'
+import { QuoteChip } from '../components/Composer'
+import { anchorInline, type TextAnchor } from '../lib/anchor'
 import {
   asrSupported,
   loadVoiceSettings,
@@ -46,7 +48,8 @@ export function TeachSession({ courseId, onExit }: { courseId: string; onExit: (
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [ask, setAsk] = useState('')
-  const [quoteNote, setQuoteNote] = useState<string | null>(null)
+  /** 引用到输入框的那段（连位置锚），像 QQ 那样浮在输入框上方 */
+  const [quote, setQuote] = useState<TextAnchor | null>(null)
   const [, setAnnTick] = useState(0)
   const { sel, clear } = useSelectionMenu(true)
   useEffect(() => {
@@ -129,11 +132,14 @@ export function TeachSession({ courseId, onExit }: { courseId: string; onExit: (
     }
   }
 
+  /* 提问：引用过就把位置锚一起塞进问题里（界面上看不到这一段） */
   const sendAsk = () => {
     const q = ask.trim()
     if (!q) return
     setAsk('')
-    void go('explain', q)
+    const used = quote
+    setQuote(null)
+    void go('explain', q + anchorInline(used))
   }
 
   /* ── 结算 ── */
@@ -319,7 +325,14 @@ export function TeachSession({ courseId, onExit }: { courseId: string; onExit: (
                   老师在写…
                 </div>
               ) : (
-                <MiniMarkdown text={content} />
+                // 打上来源标记：从讲解里选一句话引用时，锚能记下"这一课·这一步"
+                <div
+                  data-source-id={`teach-${sessionId ?? 'live'}`}
+                  data-source-kind="teach"
+                  data-chapter-title={step?.title ?? lessonTitle}
+                >
+                  <MiniMarkdown text={content} />
+                </div>
               )}
             </motion.div>
           </AnimatePresence>
@@ -339,6 +352,7 @@ export function TeachSession({ courseId, onExit }: { courseId: string; onExit: (
       {/* 操作区 */}
       <div className="shrink-0 border-t border-line bg-surface/50 px-6 py-3">
         <div className="mx-auto w-full max-w-[1180px]">
+          <QuoteChip anchor={quote} onClear={() => setQuote(null)} />
           <div className="mb-2.5 flex items-center gap-1.5 rounded-md border border-line bg-surface px-3">
             {asrSupported() && voice.current.asrEnabled && (
               <button
@@ -376,7 +390,7 @@ export function TeachSession({ courseId, onExit }: { courseId: string; onExit: (
               value={ask}
               onChange={(e) => setAsk(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && sendAsk()}
-              placeholder={quoteNote ? `引用：${quoteNote.slice(0, 24)}…` : listening ? '正在听你说…' : '提问'}
+              placeholder={quote ? `引用：「${quote.quote.slice(0, 24)}…」` : listening ? '正在听你说…' : '提问'}
               className="h-9 flex-1 bg-transparent text-sm text-ink placeholder:text-ink-mute focus:outline-none"
             />
             <button
@@ -418,9 +432,10 @@ export function TeachSession({ courseId, onExit }: { courseId: string; onExit: (
         courseId={courseId}
         mode="teach"
         onAsk={() => {}}
-        onQuote={(text) => {
-          setAsk((v) => (v ? v : text))
-          setQuoteNote(text)
+        onQuote={(s) => {
+          // 引用整段（带位置锚）；输入框空着就把原文填进去当草稿
+          setQuote(s.anchor)
+          setAsk((v) => v || s.text.slice(0, 200))
           clear()
           window.getSelection()?.removeAllRanges()
         }}

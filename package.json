@@ -1,6 +1,6 @@
 {
   "name": "alp",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "license": "MIT",
   "description": "Teach me — 一个会教你的私人图书馆。本地优先，教材和讲解都由 AI 按你的水平写。",

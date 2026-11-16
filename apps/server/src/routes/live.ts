@@ -1,8 +1,9 @@
-﻿import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import fastifyWebsocket from '@fastify/websocket'
 import type { WebSocket } from 'ws'
 import { liveStatus, mossConfig, openLiveBridge, saveMossConfig, MOSS_BASE } from '../services/mossLive.js'
 import { selfStudyAsk, paragraphOptions } from '../services/selfStudy.js'
+import type { AnchorInput } from '../lib/anchor.js'
 import { testLlm } from '../services/llm.js'
 import { run } from '../db/index.js'
 
@@ -71,19 +72,25 @@ export async function liveRoutes(app: FastifyInstance): Promise<void> {
   })
 }
 
-/// 自习模式问答（需要编号定位 + 追问澄清）
+/// 自习问答（编号定位 + 追问澄清 + 引用锚 + 全部科目）
 export async function selfStudyRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/selfstudy/ask', async (req, reply) => {
-    const b = (req.body ?? {}) as { courseId?: string; question?: string; label?: string }
-    if (!b.courseId) {
-      reply.code(400)
-      return { ok: false, error: 'courseId required' }
+    const b = (req.body ?? {}) as {
+      courseId?: string | null
+      question?: string
+      label?: string
+      anchor?: AnchorInput | null
+      quote?: string
     }
+    // courseId 允许为 null：那是「全部科目」自学，走跨库检索
+    const courseId = b.courseId && b.courseId !== 'null' ? b.courseId : null
     try {
       const r = await selfStudyAsk({
-        courseId: b.courseId,
+        courseId,
         question: b.question ?? '',
         label: b.label,
+        anchor: b.anchor ?? null,
+        quote: b.quote,
       })
       return { ok: true, ...r }
     } catch (e) {

@@ -53,7 +53,11 @@ export const API_HOST = process.env.ALP_HOST ?? '127.0.0.1'
 export const API_PORT = Number(process.env.ALP_PORT ?? 5274)
 export const NODE_ENV = process.env.NODE_ENV ?? 'development'
 export const IS_DEV = NODE_ENV !== 'production'
-export const APP_VERSION = '0.1.0'
+/**
+ * 版本号只有一个来源：Electron 主进程把 app.getVersion()（= package.json 的 version）
+ * 塞进 ALP_APP_VERSION。开发时（pnpm dev:server）没有这个变量，退回下面的常量。
+ */
+export const APP_VERSION = process.env.ALP_APP_VERSION || '1.2.0'
 
 export function ensureDirs(): void {
   for (const dir of [ALP_HOME, UPLOADS_DIR, CACHE_DIR, MODELS_DIR, LOGS_DIR]) {

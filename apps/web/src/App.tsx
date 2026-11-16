@@ -1,11 +1,11 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Library, MessagesSquare, Settings, Search, BookOpen, Plus } from 'lucide-react'
+import { Library, MessagesSquare, Settings, Search, Plus } from 'lucide-react'
 import { api } from './lib/api'
 import type { Course, CreateCourseInput } from './lib/types'
 import { Shelf } from './pages/Shelf'
 import { CourseDetail } from './pages/CourseDetail'
-import { AskPage } from './pages/AskPage'
+import { StudyPage, type StudyTransfer } from './pages/StudyPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { CourseWizard, type WizardMode } from './components/CourseWizard'
 import { AddPicker, type AddKind } from './components/AddMenu'
@@ -13,22 +13,35 @@ import { WelcomeModal, shouldWelcome } from './components/WelcomeModal'
 import { useRadialMark, RadialMarkOverlay, type MarkColor } from './components/RadialMark'
 import { Modal } from './components/Modal'
 
-type NavKey = 'shelf' | 'ask' | 'settings'
+type NavKey = 'shelf' | 'study' | 'settings'
 type Health = 'checking' | 'ok' | 'down'
 
+/**
+ * 左侧只有三个入口：书架 / 自习 / 设置。
+ *
+ * 「问答」和「自习模式」已经合成一个「自习」——原来问答页那套跨库检索
+ * 和自习那套编号定位，现在是同一页里的两种范围（全部科目 / 某一科）。
+ */
 const NAV: { key: NavKey; icon: typeof Library; label: string }[] = [
   { key: 'shelf', icon: Library, label: '书架' },
-  { key: 'ask', icon: MessagesSquare, label: '问答' },
+  { key: 'study', icon: MessagesSquare, label: '自习' },
   { key: 'settings', icon: Settings, label: '设置' },
 ]
 
 export default function App() {
   const [nav, setNav] = useState<NavKey>('shelf')
   const [health, setHealth] = useState<Health>('checking')
+  /** 后端报上来的版本号（= package.json 的 version），别在界面上写死 */
+  const [version, setVersion] = useState('')
   const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [openedId, setOpenedId] = useState<string | null>(null)
+
+  // 自习页：undefined = 还没选科目（停在"开始自习"）
+  const [studyScope, setStudyScope] = useState<string | null | undefined>(undefined)
+  const [studyTransfer, setStudyTransfer] = useState<StudyTransfer | null>(null)
+  const [studyKey, setStudyKey] = useState(0)
 
   const [wizardOpen, setWizardOpen] = useState(false)
   const [wizardMode, setWizardMode] = useState<WizardMode>('course')
@@ -44,6 +57,33 @@ export default function App() {
     if (shouldWelcome()) {
       const t = setTimeout(() => setWelcomeOpen(true), 700)
       return () => clearTimeout(t)
+    }
+  }, [])
+
+  /* 页面里各处的「自习」入口都走事件，省得一层层往下传 props：
+       alp:open-study      → 进自习页（带上某一科，或者不带 = 全部科目）
+       alp:ask-fullscreen  → 划词抽屉里点了「全屏」，把线程和引用一起端过来 */
+  useEffect(() => {
+    const onOpenStudy = (e: Event) => {
+      const d = (e as CustomEvent<{ courseId?: string | null }>).detail ?? {}
+      setStudyTransfer(null)
+      setStudyScope(d.courseId ?? undefined)
+      setStudyKey((k) => k + 1)
+      setNav('study')
+    }
+    const onAskFullscreen = (e: Event) => {
+      const d = (e as CustomEvent<StudyTransfer>).detail
+      if (!d) return
+      setStudyTransfer(d)
+      setStudyScope(d.courseId ?? null)
+      setStudyKey((k) => k + 1)
+      setNav('study')
+    }
+    window.addEventListener('alp:open-study', onOpenStudy)
+    window.addEventListener('alp:ask-fullscreen', onAskFullscreen)
+    return () => {
+      window.removeEventListener('alp:open-study', onOpenStudy)
+      window.removeEventListener('alp:ask-fullscreen', onAskFullscreen)
     }
   }, [])
 
@@ -84,7 +124,11 @@ export default function App() {
     const ping = async () => {
       try {
         const r = await api.health()
-        if (alive) setHealth(r.ok ? 'ok' : 'down')
+        if (alive) {
+          setHealth(r.ok ? 'ok' : 'down')
+          // 版本号由后端报（Electron 那边会把它设成 package.json 的 version）
+          if (r.version) setVersion(r.version)
+        }
       } catch {
         if (alive) setHealth('down')
       }
@@ -178,10 +222,10 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-base">
-      {/* 左侧导航 */}
-      <nav className="flex w-[76px] shrink-0 flex-col items-center gap-1 border-r border-line bg-surface/60 py-4">
-        <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-accent text-accent-fg">
-          <BookOpen size={18} strokeWidth={2.2} />
+      {/* 左侧导航：比原来宽一点（76 → 96），图标和字都大一号 */}
+      <nav className="flex w-[96px] shrink-0 flex-col items-center gap-1.5 border-r border-line bg-surface/60 py-4">
+        <div className="mb-3 h-11 w-11 overflow-hidden rounded-lg border border-line-strong/60 bg-surface-2">
+          <img src="/icon-256.png" alt="Teach me" className="h-full w-full object-cover" />
         </div>
         {NAV.map(({ key, icon: Icon, label }) => {
           const on = key === nav
@@ -192,23 +236,22 @@ export default function App() {
                 setNav(key)
                 if (key === 'shelf') setOpenedId(null)
               }}
-              className={`flex w-[60px] flex-col items-center gap-1 rounded-md py-2.5 transition-colors ${
+              className={`flex w-[72px] flex-col items-center gap-1.5 rounded-lg py-3 transition-colors ${
                 on
                   ? 'bg-surface-3 text-accent'
                   : 'text-ink-mute hover:bg-surface-2 hover:text-ink-dim'
               }`}
               title={label}
             >
-              <Icon size={18} strokeWidth={1.9} />
-              <span className="text-2xs tracking-wide">{label}</span>
+              <Icon size={21} strokeWidth={1.9} />
+              <span className="text-xs tracking-wide">{label}</span>
             </button>
           )
         })}
 
         <div className="mt-auto text-center text-[9px] leading-tight text-ink-mute/60">
-          ALP
-          <br />
-          v1.0
+          Teach me
+          <br />v{version || '—'}
         </div>
       </nav>
 
@@ -282,7 +325,15 @@ export default function App() {
               />
             ))}
 
-          {nav === 'ask' && <AskPage />}
+          {nav === 'study' && (
+            <StudyPage
+              key={studyKey}
+              courses={courses}
+              initialCourseId={studyScope}
+              transfer={studyTransfer}
+              onOpenSettings={() => setNav('settings')}
+            />
+          )}
           {nav === 'settings' && <SettingsPage />}
         </main>
       </div>

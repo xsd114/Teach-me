@@ -1,9 +1,10 @@
-﻿import { all } from '../db/index.js'
+import { all } from '../db/index.js'
 import { renderPrompt } from '../prompts/index.js'
 import { extractJson } from './llm.js'
 import { chat } from './llm.js'
 import { getCourse } from './course.js'
 import { hybridSearch } from './search.js'
+import { renderAnchor, resolveAnchor, type AnchorInput } from '../lib/anchor.js'
 
 /**
  * 自习模式的问答。
@@ -242,18 +243,39 @@ ${kind === 'academic' ? '这是学业课：**先给思路，不要直接给最�
 
 /**
  * 自习问答主入口。
+ *
+ * 三种入口共用一套回答：
+ *   ① 引用某一段（带锚，位置已知）—— 直接用锚定位，不问编号
+ *   ② 在某一门课里（会先解析 A2-3 / Q1 这类编号）
+ *   ③ 全部科目（没有教材编号这回事，走跨库检索）
  */
 export async function selfStudyAsk(input: {
-  courseId: string
+  /** null = 全部科目 */
+  courseId: string | null
   question: string
   /** 用户点选的编号（可选，优先于从问题里解析） */
   label?: string
+  /** 引用锚：用户选了一段话问，位置坐标已经带上了 */
+  anchor?: AnchorInput | null
+  /** 只有引用原文、没有坐标时（程序化引用） */
+  quote?: string | null
 }): Promise<SelfStudyResult> {
-  const course = getCourse(input.courseId)
-  if (!course) throw new Error('课程不存在')
+  const cid = input.courseId
+  const course = cid ? getCourse(cid) : null
+  if (cid && !course) throw new Error('课程不存在')
 
   const question = input.question.trim()
   if (!question) throw new Error('请先输入问题')
+
+  // 0. 引用优先：带了锚就用锚定位，不再逼用户报编号
+  if (input.anchor?.quote || input.quote) {
+    return answerQuoted({ courseId: cid, course, question, anchor: input.anchor, quote: input.quote })
+  }
+
+  // 0.5 全部科目：跨课程答疑，没有编号可解析
+  if (!course) return answerAllSubjects(question)
+
+  const courseId = course.id
 
   // 1. 先解析编号
   let ref = parseRef(input.label ?? question)
@@ -264,12 +286,12 @@ export async function selfStudyAsk(input: {
 
   // 1.5 题目编号优先（Q1 / Q2）
   if (ref.questionNo) {
-    const hit = locateQuestion(input.courseId, ref.questionNo)
+    const hit = locateQuestion(courseId, ref.questionNo)
     if (!hit) {
       return {
         kind: 'need_paragraph',
         message: `没找到 Q${ref.questionNo} 这道题。你是想问下面哪一道？`,
-        options: listQuestions(input.courseId),
+        options: listQuestions(courseId),
       }
     }
     const opts = (() => {
@@ -302,21 +324,21 @@ export async function selfStudyAsk(input: {
       ],
       { json: true, temperature: 0.6, maxTokens: 1400 },
     )
-    const p2 = extractJson<{ answer: string; figures?: unknown[] }>(r.text)
-    const ans = (p2?.answer ?? r.text).trim()
+    const p2 = pickAnswer(r.text)
+    const ans = p2.answer.trim()
     return {
       kind: 'answer',
       message: ans.slice(0, 900),
       answer: ans,
-      figures: Array.isArray(p2?.figures) ? p2!.figures : [],
+      figures: p2.figures,
       paragraph: { label: hit.label, text: hit.q.stem.slice(0, 200) },
     }
   }
 
   // 2. 没有编号 → 让他选
   if (!ref.paraNo) {
-    const options = paragraphOptions(input.courseId)
-    const qs = listQuestions(input.courseId, 10)
+    const options = paragraphOptions(courseId)
+    const qs = listQuestions(courseId, 10)
     return {
       kind: 'need_paragraph',
       message:
@@ -328,9 +350,9 @@ export async function selfStudyAsk(input: {
   }
 
   // 3. 定位段落
-  const para = locateParagraph(input.courseId, ref)
+  const para = locateParagraph(courseId, ref)
   if (!para) {
-    const options = paragraphOptions(input.courseId)
+    const options = paragraphOptions(courseId)
     return {
       kind: 'need_paragraph',
       message: `没找到 A${ref.chapterNo ?? '?'}-${ref.paraNo} 这一段。你是想说下面哪个？`,
@@ -351,7 +373,7 @@ export async function selfStudyAsk(input: {
   let extra = ''
   try {
     const sr = await hybridSearch(`${para.text.slice(0, 60)} ${question}`, {
-      courseId: input.courseId,
+      courseId: courseId,
       topK: 3,
     })
     extra = sr.hits.map((h) => h.text).join('\n---\n').slice(0, 2500)
@@ -382,14 +404,174 @@ export async function selfStudyAsk(input: {
     { json: true, temperature: 0.6, maxTokens: 1600 },
   )
 
-  const parsed = extractJson<{ answer: string; figures?: unknown[] }>(r.text)
-  const answer = (parsed?.answer ?? r.text).trim()
+  const parsed = pickAnswer(r.text)
+  const answer = parsed.answer
 
   return {
     kind: 'answer',
     message: answer.slice(0, 900),
     answer,
-    figures: Array.isArray(parsed?.figures) ? parsed!.figures : [],
+    figures: parsed.figures,
     paragraph: { label: para.label, text: para.text.slice(0, 200) },
+  }
+}
+
+/* ══════════════════════════════════════════════════════════
+   引用某一段：锚里有坐标，直接翻原文，不再问"你指哪一段"
+   ══════════════════════════════════════════════════════════ */
+
+/**
+ * 模型有时会把答案套一层（{content:{reply}} / {reply} / {message}），
+ * 直接取 .answer 会拿到 undefined，然后把整段 JSON 当答案念给学生。
+ * 这里挨个试，实在没有才退回原文。
+ */
+function pickAnswer(raw: string): { answer: string; figures: unknown[] } {
+  const parsed = extractJson<Record<string, unknown>>(raw)
+  const unwrap = (
+    o: unknown,
+    depth = 0,
+  ): { answer?: string; figures?: unknown[] } | null => {
+    if (!o || typeof o !== 'object' || depth > 3) return null
+    const rec = o as Record<string, unknown>
+    for (const k of ['answer', 'reply', 'message', 'text', 'content']) {
+      const v = rec[k]
+      if (typeof v === 'string' && v.trim()) {
+        return {
+          answer: v.trim(),
+          figures: Array.isArray(rec.figures) ? rec.figures : undefined,
+        }
+      }
+      if (v && typeof v === 'object') {
+        const inner = unwrap(v, depth + 1)
+        if (inner?.answer) return inner
+      }
+    }
+    return null
+  }
+  const hit = parsed ? unwrap(parsed) : null
+  if (hit?.answer) return { answer: hit.answer, figures: Array.isArray(hit.figures) ? hit.figures : [] }
+  return { answer: raw.trim(), figures: [] }
+}
+
+async function answerQuoted(input: {
+  courseId: string | null
+  course: ReturnType<typeof getCourse> | null
+  question: string
+  anchor?: AnchorInput | null
+  quote?: string | null
+}): Promise<SelfStudyResult> {
+  const { course, question } = input
+  const anchor = input.anchor ?? null
+  const kind = course?.kind ?? 'skill'
+
+  // 有段落编号就回教材把整段翻出来 —— 用户引用的往往只是半句
+  const resolved = resolveAnchor(input.courseId, anchor)
+
+  const passage = (resolved?.text ?? anchor?.quote ?? input.quote ?? '').trim()
+
+  const anchorBlock = anchor
+    ? renderAnchor(
+        { ...anchor, chapterTitle: anchor.chapterTitle ?? resolved?.chapterTitle },
+        resolved ? `【这一段在教材里的原文】${resolved.text}` : '',
+      )
+    : resolved
+      ? `【引用位置】教材段落 ${resolved.label}\n【这一段在教材里的原文】${resolved.text}`
+      : ''
+
+  let extra = ''
+  try {
+    const sr = await hybridSearch(`${passage.slice(0, 60)} ${question}`, {
+      courseId: input.courseId,
+      topK: 3,
+    })
+    extra = sr.hits.map((h) => h.text).join('\n---\n').slice(0, 2000)
+  } catch {
+    extra = ''
+  }
+
+  const pAns = renderPrompt('selfstudy.answer', {
+    label: resolved?.label ?? anchor?.paraLabel ?? '引用',
+    paragraph: passage.slice(0, 2000),
+    before: resolved?.before || anchor?.before || '（无）',
+    after: resolved?.after || anchor?.after || '（无）',
+    question,
+    extra: [
+      anchorBlock,
+      extra ? `可参考的资料：\n${extra}` : '',
+      '位置已经给了，不要反问"你指的是哪一段"。先把这句话放回上下文解释，再回答。',
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    kindRule:
+      kind === 'academic'
+        ? '这是学业课：**先给思路，不要直接给最终答案**。让他自己往下推一步。'
+        : '这是技能课：给可操作的做法和判断标准。',
+    maxLen: (course?.verbosity ?? 3) >= 4 ? '300' : '180',
+  })
+
+  const r = await chat(
+    [
+      { role: 'system', content: pAns.system ?? SYSTEM(kind, course?.verbosity ?? 3) },
+      { role: 'user', content: pAns.user },
+    ],
+    { json: true, temperature: 0.6, maxTokens: 1600 },
+  )
+
+  const { answer, figures } = pickAnswer(r.text)
+
+  return {
+    kind: 'answer',
+    message: answer.slice(0, 900),
+    answer,
+    figures,
+    paragraph: { label: resolved?.label ?? anchor?.paraLabel ?? '引用', text: passage.slice(0, 200) },
+  }
+}
+
+/* ══════════════════════════════════════════════════════════
+   全部科目：没有教材编号，靠跨库检索 + 自己的知识
+   ══════════════════════════════════════════════════════════ */
+
+const SYSTEM_ALL = `你是 ALP 的自习陪伴老师。学生这次没有选具体科目，问题可能跨好几门课。
+
+回答规则：
+1. 先用短句，一句不超过 25 字。
+2. 有资料就用资料的说法，并在句末标 [1] [2] 指回来源。
+3. 资料里没有就直说，再用你自己的知识补，并说明这一点。
+4. 学业类问题先给思路，不要直接甩答案；技能类问题给可操作的做法和判断标准。
+5. 不确定的地方，说不确定。
+6. 总长度 300 字以内，需要配图时输出 figure。
+
+只输出 JSON：{"answer": "正文", "figures": []}`
+
+async function answerAllSubjects(question: string): Promise<SelfStudyResult> {
+  const sr = await hybridSearch(question, { courseId: null, topK: 5 })
+  const ctx = sr.hits.length
+    ? sr.hits
+        .map((h, i) => `[${i + 1}]（${h.materialName}${h.headingPath ? ' · ' + h.headingPath : ''}）\n${h.text}`)
+        .join('\n\n---\n\n')
+        .slice(0, 8000)
+    : ''
+
+  const user = ctx
+    ? `【全部科目检索结果】\n${ctx}\n\n【他的问题】${question}`
+    : `【全部科目的记忆库里没检索到相关内容】\n\n【他的问题】${question}\n\n没有资料就说明这一点，再用你自己的知识答。`
+
+  const r = await chat(
+    [
+      { role: 'system', content: SYSTEM_ALL },
+      { role: 'user', content: user },
+    ],
+    { json: true, temperature: 0.6, maxTokens: 1600 },
+  )
+
+  const { answer, figures } = pickAnswer(r.text)
+
+  return {
+    kind: 'answer',
+    message: answer.slice(0, 900),
+    answer,
+    figures,
+    paragraph: sr.hits.length ? { label: '', text: sr.hits[0].text.slice(0, 200) } : undefined,
   }
 }

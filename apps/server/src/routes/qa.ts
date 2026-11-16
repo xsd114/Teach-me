@@ -1,6 +1,7 @@
-﻿import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import { ask, deleteThread, listThreads, qaScopeStatus, threadMessages } from '../services/qa.js'
 import { hasApiKey } from '../services/llm.js'
+import type { AnchorInput } from '../lib/anchor.js'
 
 export async function qaRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/qa/threads', async (req) => {
@@ -33,6 +34,7 @@ export async function qaRoutes(app: FastifyInstance): Promise<void> {
       topK?: number
       context?: string
       quote?: string
+      anchor?: AnchorInput | null
     }
     if (!b.question?.trim()) {
       reply.code(400)
@@ -50,6 +52,7 @@ export async function qaRoutes(app: FastifyInstance): Promise<void> {
         topK: b.topK,
         context: b.context,
         quote: b.quote,
+        anchor: b.anchor ?? null,
       })
       return { ok: true, ...r }
     } catch (e) {
