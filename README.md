@@ -1,8 +1,18 @@
 # Teach me
 
+[![Release](https://img.shields.io/github/v/release/xsd114/Teach-me?color=e7b75f&label=release)](https://github.com/xsd114/Teach-me/releases)
+[![License](https://img.shields.io/github/license/xsd114/Teach-me?color=e7b75f)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/xsd114/Teach-me?style=social)](https://github.com/xsd114/Teach-me/stargazers)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
+
 **一个会教你的私人图书馆。** 丢进来一门课，它先摸清你的底子，写一本只给你的教材，然后一节一节带你读。
 
-本地优先 · 数据在自己硬盘上 · 教材和讲解都按你的水平现场生成
+> An AI tutor that writes **your own** textbook, then walks you through it chapter by chapter.
+> Local-first: your books, notes and progress stay on your own disk. Electron + React + DeepSeek / Ollama.
+
+本地优先 · 数据在自己硬盘上 · 教材和讲解都按你的水平现场生成 · MIT
+
+![书架](docs/screenshots/shelf.png)
 
 ---
 
@@ -29,6 +39,12 @@ Teach me 想补中间那块：**它记住你**。你划的重点、问的问题�
 | **自习** | 左边栏「自习」：选一门科目或全部科目开聊。能引用一句话来问（位置一起发过去）、能直接贴图、答完存进错题本或记忆库；语音默认关，右下角点一下才告诉你怎么配 |
 | **提示词开放** | 写教材、出题、讲课、答疑的提示词全在设置里摊开，能改 |
 | **日志与诊断** | 出问题就点「生成并导出日志」：版本、数据库状态、最近 1500 行日志、前端报错打成一份 txt，直接发给我 |
+
+## 长什么样
+
+| 自习问答（引用带位置，贴图先预览） | 日志与诊断（出错时导一份给我） |
+|---|---|
+| ![自习](docs/screenshots/study.png) | ![诊断](docs/screenshots/diagnostics.png) |
 
 ---
 
@@ -60,7 +76,7 @@ Teach me 想补中间那块：**它记住你**。你划的重点、问的问题�
 ### 从源码跑
 
 ```bash
-git clone https://github.com/<your-name>/teach-me.git
+git clone https://github.com/xsd114/Teach-me.git
 cd teach-me
 pnpm install
 pnpm dev
@@ -104,9 +120,11 @@ pnpm run dist             # 出安装包，产物在 release/
 ## 数据在哪
 
 ```
-E:/Teach me-data/            E 盘存在时优先
-%APPDATA%/Teach me/          找不到 E 盘时
-```
+E:\ALP-data\          哪个非系统盘（E → D → F → G）能建目录就用哪个
+%APPDATA%\ALP\        一个都建不了时
+`
+
+> 名字还是 ALP（项目旧名），**别改**：改了现有用户的库就读不到了。``
 
 里面是数据库（SQLite）、上传的文件、模型缓存。设置 → 数据里能看到具体路径，也能一键备份。
 
@@ -189,13 +207,13 @@ E:/Teach me-data/            E 盘存在时优先
 
 ```
 apps/
-  server/           Fastify 后端
-    src/db/         schema + 迁移（现在是 v10）
+  server/           Fastify 后端（含日志落盘与诊断包）
+    src/db/         schema + 迁移（现在是 v11）
     src/prompts/    七条提示词，默认值编译进程序
     src/services/   教材 / 讲课 / 自习 / 向量 / MOSS
     src/routes/     API
   web/              React 前端
-    src/pages/      书架 / 课程 / 教材 / 上课 / 自习 / 设置
+    src/pages/      书架 / 课程 / 教材 / 上课 / 自习问答（StudyPage）/ 设置
     src/components/ 划词菜单 / 三色圆盘 / 标记栏 / 欢迎框
 electron/           主进程 + 打包配置
 ```
@@ -236,7 +254,6 @@ electron/           主进程 + 打包配置
 - 划词跨段落（比如跨过 `<strong>`）的高亮会跳过，只标到能匹配的单节点片段
 - 配图只能在章标题下面，插不进正文中间
 - 单章重写会跑一遍整章，慢
-- 图标还是 Electron 默认的
 - 没有代码签名，Windows 会拦一下
 
 ---
@@ -257,3 +274,13 @@ electron/           主进程 + 打包配置
 [MIT](LICENSE)
 
 用、改、商用都行，出了事别找我。
+
+---
+
+## 最后
+
+这个项目从「不想再被网课糊一脸」开始，一路做成现在这样：会写书、会上课、会记住你划的重点、出错时还会自己留一份日志。
+
+如果它帮你省下几个晚上，**点个 ⭐ Star** 就是最实在的回礼 —— 也让我知道值得继续做下去。
+
+有 bug、想要的功能、或者哪句话讲得不清楚，开个 [issue](https://github.com/xsd114/Teach-me/issues) 或直接提 PR，我一条条看。
