@@ -436,13 +436,12 @@ function UploadAndAnalyze({
         </button>
       </div>
       <p className="mt-1.5 text-[10px] leading-relaxed text-ink-mute">
-        支持 PDF / Word / PPT / Markdown / 纯文本。可选 —— 不传也行，我按名字和你的描述来写。
+        什么都能传：PDF / Word / PPT / Markdown / 纯文本 / epub / azw3 / mobi。可选——不传也行，我按名字和你的描述来写。
       </p>
       <input
         ref={fileRef}
         type="file"
         className="hidden"
-        accept=".pdf,.doc,.docx,.ppt,.pptx,.md,.txt,.html,.csv"
         onChange={(e) => {
           const f = e.target.files?.[0]
           if (f) void upload(f)

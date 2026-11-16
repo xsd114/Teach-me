@@ -14,6 +14,24 @@ export type ParseResult = {
 const TEXT_EXT = new Set(['.md', '.markdown', '.txt', '.csv', '.json', '.log', '.html', '.htm', '.tex'])
 const MARKITDOWN_EXT = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.xls', '.epub', '.msg', '.ipynb'])
 
+/**
+ * Kindle 那几种格式：markitdown 只能读 epub，
+ * azw3 / mobi 得先拆成 epub 再交给它。
+ * 用 mobi 这个 Python 库（kindleunpack 的封装），extract() 直接返回 epub 路径。
+ */
+const KINDLE_EXT = new Set(['.azw3', '.azw', '.mobi', '.prc'])
+
+/** 一行 Python：拆成 epub 再转 markdown */
+const KINDLE_PY = [
+  'import sys, tempfile, os, subprocess',
+  'import mobi',
+  'src = sys.argv[1]',
+  'tmp, epub = mobi.extract(src)',
+  'out = subprocess.run([sys.executable, "-m", "markitdown", epub], capture_output=True)',
+  'sys.stdout.buffer.write(out.stdout)',
+  'sys.stderr.write(out.stderr.decode("utf-8", "ignore")[:500])',
+].join('\n')
+
 export function extOf(filePath: string): string {
   return path.extname(filePath).toLowerCase()
 }
@@ -80,6 +98,25 @@ export async function parseFile(filePath: string): Promise<ParseResult> {
         ms: Date.now() - t0,
         error: e instanceof Error ? e.message : 'read failed',
       }
+    }
+  }
+
+  // 1.5 Kindle 系列：azw3 / mobi / azw / prc 先拆成 epub
+  if (KINDLE_EXT.has(ext)) {
+    const r = await runPython(['-c', KINDLE_PY, filePath], { timeoutMs: 300_000 })
+    const text = r.stdout.trim()
+    if (r.ok && text.length > 0) {
+      return { ok: true, text, parser: 'mobi+markitdown', degraded: false, ms: Date.now() - t0 }
+    }
+    return {
+      ok: false,
+      text: '',
+      parser: 'mobi',
+      degraded: true,
+      ms: Date.now() - t0,
+      error:
+        (r.stderr || '').slice(0, 300) ||
+        '拆不开这个 Kindle 文件。可能是 DRM 保护的，得先用 Calibre 去 DRM。',
     }
   }
 

@@ -1,4 +1,4 @@
-﻿import { all, one, run } from '../db/index.js'
+import { all, one, run } from '../db/index.js'
 import { newId, nowIso } from '../lib/id.js'
 import { clampText, VERBOSITY_MAX_CHARS, type Verbosity } from '../lib/verbosity.js'
 import { chat, extractJson } from './llm.js'
@@ -136,7 +136,8 @@ export async function generateOutline(courseId: string): Promise<{
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { json: true, temperature: 0.5, maxTokens: 2000 },
+    // 12 个课时 × 三段字段的 JSON，2000 token 常要 60–90s；默认 90s 会踩线 abort
+    { json: true, temperature: 0.5, maxTokens: 2000, timeoutMs: 180_000 },
   )
 
   const parsed = extractJson<{ lessons: { title: string; summary: string; focus: string }[] }>(r.text)

@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import {
   answerInterview,
   buildTextbook,
@@ -13,6 +13,7 @@ import {
   splitIntoChapters,
   STYLE_LABEL,
   SUPPORT_LABEL,
+  writeNextChapter,
   type Profile,
 } from '../services/textbook.js'
 import { hasApiKey } from '../services/llm.js'
@@ -215,6 +216,25 @@ export async function textbookRoutes(app: FastifyInstance): Promise<void> {
       return { ok: false, error: 'courseId required' }
     }
     return { ok: true, removed: deleteTextbook(q.courseId) }
+  })
+
+  /**
+   * 写下一章。一次请求 = 一章，返回 done:true 表示整本写完。
+   * 前端串行调用即可，不需要再猜"等多久算超时"。
+   */
+  app.post('/api/textbook/:id/next', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    if (!hasApiKey()) {
+      reply.code(400)
+      return { ok: false, error: '还没配置模型 API Key' }
+    }
+    try {
+      const r = await writeNextChapter(id)
+      return { ok: true, ...r }
+    } catch (e) {
+      reply.code(400)
+      return { ok: false, error: e instanceof Error ? e.message : '这一章没写成' }
+    }
   })
 
   app.post('/api/textbook/:chapterId/rewrite', async (req, reply) => {

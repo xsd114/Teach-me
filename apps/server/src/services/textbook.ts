@@ -344,6 +344,8 @@ export type TextbookChapter = {
   selfCheck: string
   wordCount: number
   figures: unknown[]
+  /** pending 还没写 / done 写完了 / failed 这次没写成（可直接重写） */
+  status: string
 }
 
 export type Textbook = {
@@ -355,8 +357,10 @@ export type Textbook = {
   status: string
   stage: string
   progress: number
+  error: string | null
   profile: Profile | null
   sources: string[]
+  sourcesBlock: string
   chapters: TextbookChapter[]
   createdAt: string
 }
@@ -370,8 +374,10 @@ type TextbookRow = {
   status: string
   stage: string
   progress: number
+  error: string | null
   profile_json: string
   sources_json: string
+  sources_block: string
   created_at: string
 }
 
@@ -386,8 +392,9 @@ function chaptersOf(textbookId: string): TextbookChapter[] {
     self_check: string
     word_count: number
     figures_json: string
+    status: string
   }>(
-    `SELECT id, order_index, title, summary, content_md, goal, self_check, word_count, figures_json
+    `SELECT id, order_index, title, summary, content_md, goal, self_check, word_count, figures_json, status
        FROM textbook_chapter WHERE textbook_id = ? ORDER BY order_index`,
     textbookId,
   ).map((r) => ({
@@ -399,6 +406,7 @@ function chaptersOf(textbookId: string): TextbookChapter[] {
     goal: r.goal,
     selfCheck: r.self_check,
     wordCount: r.word_count,
+    status: r.status,
     figures: (() => {
       try {
         return JSON.parse(r.figures_json || '[]')
@@ -432,8 +440,10 @@ function toBook(row: TextbookRow): Textbook {
     status: row.status,
     stage: row.stage,
     progress: row.progress,
+    error: row.error ?? null,
     profile,
     sources,
+    sourcesBlock: row.sources_block ?? '',
     chapters: chaptersOf(row.id),
     createdAt: row.created_at,
   }
@@ -530,9 +540,21 @@ export async function buildTextbook(courseId: string): Promise<string> {
     ts,
   )
 
-  void generateInto(id, course.title, '', profile).catch(() => {
-    setBookStage(id, 'failed', 100, { status: 'failed' })
+  // 只启动"规划"（收集资料 + 大纲 + 建章节骨架），不等整本书写完：
+  // 书由前端一章一个请求推下去（POST /api/textbook/:id/next），单请求 1–3 分钟，
+  // 不会再出现"等了 5 分钟判超时、其实后台还在写"的情况。
+  const p = planBook(id, course.title, profile).catch((e) => {
+    const msg = e instanceof Error ? e.message : String(e)
+    run(
+      `UPDATE textbook SET status = 'failed', stage = 'failed', progress = 100, error = ?, updated_at = ? WHERE id = ?`,
+      msg.slice(0, 300),
+      nowIso(),
+      id,
+    )
+    console.error(`[textbook] 规划失败 ${id}：${msg}`)
   })
+  planning.set(id, p)
+  void p.finally(() => planning.delete(id))
 
   return id
 }
@@ -820,13 +842,49 @@ async function buildChapter(args: {
   }
 }
 
-/** 真正写书：大纲 → 逐章（每章再拆成逐节） */
-export async function generateInto(
-  id: string,
-  courseTitle: string,
-  _subtitle: string,
-  profile: Profile,
-): Promise<void> {
+/* ------------------------------------------------------------------
+   一章一生成
+
+   为什么不再"一次写完整本"：
+     7 章的书要 20 多次模型调用、5–10 分钟，中间任何一层超时（前端轮询、
+     代理、浏览器）都会把整本书判死，而它其实只是慢。拆成"先规划、再一章
+     一个请求"之后：单次请求 1–3 分钟，失败只废一章还能单独重写，前端也
+     不必再靠"等了多久"来猜是不是挂了。
+   ------------------------------------------------------------------ */
+
+export type StepResult = {
+  /** 整本写完了 */
+  done: boolean
+  /** 刚写完的是第几章（1-based）；还没开始写时是 0 */
+  chapterIndex: number
+  /** 刚写完那一章的标题 */
+  title: string
+  /** 还剩几章没写 */
+  remaining: number
+  stage: string
+  progress: number
+}
+
+/** 规划中的书 / 正在写的那一章：同一本书同时只允许一个在跑 */
+const planning = new Map<string, Promise<void>>()
+const writing = new Map<string, Promise<StepResult>>()
+
+function stepView(book: Textbook, done: boolean): StepResult {
+  return {
+    done,
+    chapterIndex: 0,
+    title: '',
+    remaining: book.chapters.filter((c) => c.status === 'pending' || c.status === 'writing').length,
+    stage: book.stage,
+    progress: book.progress,
+  }
+}
+
+/**
+ * 规划：收集资料 → 出大纲 → 章节骨架落库。正文一个字都不写。
+ * 跑完就有一个稳定起点，后面每章一次请求往里填。
+ */
+async function planBook(id: string, courseTitle: string, profile: Profile): Promise<void> {
   const book = getTextbookById(id)
   if (!book) throw new Error('教材记录丢失')
   const course = getCourse(book.courseId)
@@ -864,12 +922,14 @@ export async function generateInto(
 ${srcBlock}`,
   })
 
+  // 大纲是一次 2000 token 的 JSON 生成，deepseek-chat 出满常要 70–90s，
+  // 用默认 90s 会稳定踩线 abort，进而把整本书打成 failed（实测会发生）。
   const outline = await chat(
     [
       { role: 'system', content: pOutline.system ?? '' },
       { role: 'user', content: pOutline.user },
     ],
-    { json: true, temperature: 0.7, maxTokens: 2000 },
+    { json: true, temperature: 0.7, maxTokens: 2000, timeoutMs: 180_000 },
   )
 
   const parsed = extractJson<{
@@ -881,80 +941,146 @@ ${srcBlock}`,
 
   if (!parsed?.chapters?.length) {
     setBookStage(id, 'failed', 100, { status: 'failed' })
-    throw new Error('大纲生成失败')
+    throw new Error('大纲生成失败：模型没给出章节列表')
   }
 
+  const total = parsed.chapters.length
+
+  // 资料摘要必须落库：拆成一章一个请求之后，写下一章时内存里已经没它了
   run(
-    `UPDATE textbook SET title = ?, subtitle = ?, preface = ? WHERE id = ?`,
+    `UPDATE textbook SET title = ?, subtitle = ?, preface = ?, sources_block = ? WHERE id = ?`,
     parsed.title || `${courseTitle}·给你的一本`,
     parsed.subtitle || '',
     parsed.preface || '',
+    srcBlock.slice(0, 8000),
     id,
   )
 
-  const total = parsed.chapters.length
-  const bookTitle = parsed.title || courseTitle
-  const chProfile = `${profileBlockOf(profile, goal)}
+  // 章节骨架先建齐（pending），每章一次请求去填正文
+  parsed.chapters.forEach((ch, i) => {
+    run(
+      `INSERT INTO textbook_chapter(id, textbook_id, order_index, title, summary, content_md, goal, self_check, word_count, figures_json, status, created_at)
+       VALUES (?,?,?,?,?,'',?,'',0,'[]','pending',?)`,
+      newId('chp'),
+      id,
+      i,
+      ch.title,
+      ch.summary || '',
+      ch.goal || '',
+      nowIso(),
+    )
+  })
 
-可引用资料：${srcBlock.slice(0, 5000)}`
+  setBookStage(id, `已规划 ${total} 章`, 25)
+}
 
-  setBookStage(id, 'writing', 30)
+/** 写下一章：同一本书并发调用会拿到同一个 promise，不会重复写同一章 */
+export function writeNextChapter(textbookId: string): Promise<StepResult> {
+  const running = writing.get(textbookId)
+  if (running) return running
+  const p = writeOneChapter(textbookId).finally(() => writing.delete(textbookId))
+  writing.set(textbookId, p)
+  return p
+}
 
-  for (const [i, ch] of parsed.chapters.entries()) {
-    // 这一章在总进度里的位置：30% → 95%
-    const pctAt = (frac: number) => Math.min(96, 30 + Math.round(((i + frac) / total) * 65))
+async function writeOneChapter(textbookId: string): Promise<StepResult> {
+  // 规划还没跑完就先等它（前端可以 build 完立刻开始逐章，不用自己轮询）
+  const planP = planning.get(textbookId)
+  if (planP) await planP
 
-    try {
-      const built = await buildChapter({
-        bookTitle,
-        chapterTitle: ch.title,
-        chapterGoal: ch.goal || ch.summary,
-        chapterSummary: ch.summary || '',
-        profileBlock: chProfile,
-        onStage: (secDone, secAll) =>
-          setBookStage(
-            id,
-            `writing ${i + 1}/${total} · 第 ${secDone}/${secAll} 节`,
-            pctAt(secDone / secAll),
-          ),
-      })
+  const book = getTextbookById(textbookId)
+  if (!book) throw new Error('教材不存在或已被删除')
+  if (book.status === 'failed') throw new Error(book.error || '这本书的规划失败了，重新生成一次')
+  if (book.status === 'ready') return stepView(book, true)
 
-      run(
-        `INSERT INTO textbook_chapter(id, textbook_id, order_index, title, summary, content_md, goal, self_check, word_count, figures_json, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        newId('chp'),
-        id,
-        i,
-        ch.title,
-        built.summary,
-        built.contentMd,
-        ch.goal || '',
-        built.selfCheck,
-        built.wordCount,
-        JSON.stringify(built.figures),
-        nowIso(),
-      )
-    } catch (e) {
-      run(
-        `INSERT INTO textbook_chapter(id, textbook_id, order_index, title, summary, content_md, goal, self_check, word_count, figures_json, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,'[]',?)`,
-        newId('chp'),
-        id,
-        i,
-        ch.title,
-        ch.summary || '',
-        `> 这一章生成失败：${e instanceof Error ? e.message.slice(0, 120) : '未知错误'}\n\n点右上角「重写这一章」再试一次。`,
-        ch.goal || '',
-        '',
-        0,
-        nowIso(),
-      )
-    }
+  const total = book.chapters.length
+  if (total === 0) throw new Error('这本书还没有章节规划')
 
-    setBookStage(id, `writing ${i + 1}/${total}`, pctAt(1))
+  // writing 也捡回来：上次进程被打断留下的占位，重写一遍就好
+  const next = book.chapters.find((c) => c.status === 'pending' || c.status === 'writing')
+  if (!next) {
+    setBookStage(textbookId, 'done', 100, { status: 'ready' })
+    return stepView(getTextbookById(textbookId)!, true)
   }
 
-  setBookStage(id, 'done', 100, { status: 'ready' })
+  const profile = book.profile
+  if (!profile) throw new Error('画像缺失，先做学情访谈')
+  const course = getCourse(book.courseId)
+
+  const doneBefore = book.chapters.filter((c) => c.status === 'done').length
+  const pctAt = (frac: number) => Math.min(96, 30 + Math.round(((doneBefore + frac) / total) * 65))
+
+  // 先占位成 writing：万一进程被打断，下次不会把它当成没写过而重头再来
+  run(`UPDATE textbook_chapter SET status = 'writing' WHERE id = ?`, next.id)
+  setBookStage(textbookId, `正在写第 ${next.orderIndex + 1}/${total} 章 · ${next.title}`, pctAt(0))
+
+  const chProfile = `${profileBlockOf(profile, course?.goal ?? '')}
+
+可引用资料：${book.sourcesBlock.slice(0, 5000)}`
+
+  try {
+    const built = await buildChapter({
+      bookTitle: book.title,
+      chapterTitle: next.title,
+      chapterGoal: next.goal || next.summary,
+      chapterSummary: next.summary || '',
+      profileBlock: chProfile,
+      onStage: (secDone, secAll) =>
+        setBookStage(
+          textbookId,
+          `第 ${next.orderIndex + 1}/${total} 章 · ${next.title} ${secDone}/${secAll} 节`,
+          pctAt(secDone / secAll),
+        ),
+    })
+
+    run(
+      `UPDATE textbook_chapter
+          SET content_md = ?, summary = ?, self_check = ?, word_count = ?, figures_json = ?, status = 'done'
+        WHERE id = ?`,
+      built.contentMd,
+      built.summary || next.summary,
+      built.selfCheck,
+      built.wordCount,
+      JSON.stringify(built.figures),
+      next.id,
+    )
+  } catch (e) {
+    // 一章写废不牵连别的章：留个提示，右上角「重写这一章」能单独补
+    run(
+      `UPDATE textbook_chapter
+          SET content_md = ?, self_check = '', word_count = 0, status = 'failed'
+        WHERE id = ?`,
+      `> 这一章生成失败：${e instanceof Error ? e.message.slice(0, 120) : '未知错误'}\n\n点右上角「重写这一章」再试一次。`,
+      next.id,
+    )
+  }
+
+  const after = getTextbookById(textbookId)!
+  const left = after.chapters.filter((c) => c.status === 'pending' || c.status === 'writing').length
+
+  if (left === 0) {
+    setBookStage(textbookId, 'done', 100, { status: 'ready' })
+    const fin = getTextbookById(textbookId)!
+    return { ...stepView(fin, true), chapterIndex: next.orderIndex + 1, title: next.title }
+  }
+
+  setBookStage(textbookId, `已写完 ${after.chapters.length - left}/${total} 章`, pctAt(1))
+  const mid = getTextbookById(textbookId)!
+  return { ...stepView(mid, false), chapterIndex: next.orderIndex + 1, title: next.title }
+}
+
+/** 一口气写完（CLI / 脚本用；界面走 writeNextChapter，一次一章） */
+export async function generateInto(
+  id: string,
+  courseTitle: string,
+  _subtitle: string,
+  profile: Profile,
+): Promise<void> {
+  await planBook(id, courseTitle, profile)
+  for (;;) {
+    const r = await writeOneChapter(id)
+    if (r.done) break
+  }
 }
 
 /** 单独重写一章：只动这一章，别的章一个字节都不碰 */
@@ -990,7 +1116,7 @@ export async function rewriteChapter(chapterId: string): Promise<void> {
 
     run(
       `UPDATE textbook_chapter
-          SET content_md = ?, summary = ?, self_check = ?, word_count = ?, figures_json = ?
+          SET content_md = ?, summary = ?, self_check = ?, word_count = ?, figures_json = ?, status = 'done'
         WHERE id = ?`,
       built.contentMd,
       built.summary,

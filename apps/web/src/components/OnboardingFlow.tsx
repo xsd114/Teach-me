@@ -68,40 +68,43 @@ export function OnboardingFlow({
     }
   }
 
-  /* 建教材 + 轮询 */
+  /* 建教材：先规划，再一章一个请求写完 */
   const build = async () => {
     setPhase('building')
     setErr(null)
+    let poll: ReturnType<typeof setInterval> | undefined
     try {
-      await textbookApi.build(courseId)
-      let tries = 0
-      const timer = setInterval(async () => {
-        tries++
-        try {
-          const r = await textbookApi.get(courseId)
-          if (r.textbook) {
-            setBook(r.textbook)
-            if (r.textbook.status === 'ready') {
-              clearInterval(timer)
-              setPhase('done')
-            } else if (r.textbook.status === 'failed') {
-              clearInterval(timer)
-              setErr(r.textbook.error ?? '生成失败')
-              setPhase('confirm')
-            }
-          }
-        } catch {
-          /* 继续轮询 */
-        }
-        if (tries > 120) {
-          clearInterval(timer)
-          setErr('生成超时了，稍后可以在「教材」页点重试')
-          setPhase('confirm')
-        }
+      const { textbookId } = await textbookApi.build(courseId)
+      // 轮询只负责刷进度显示，不再承担"等多久算超时"的判定
+      poll = setInterval(() => {
+        void textbookApi
+          .get(courseId)
+          .then((r) => {
+            if (r.textbook) setBook(r.textbook)
+          })
+          .catch(() => {})
       }, 2500)
+
+      // 一次一章，串行推到写完：每章 1–3 分钟，单请求不设超时，
+      // 任何一章失败也只废那一章，不会把整本书判死。
+      for (let i = 0; i < 80; i++) {
+        const step = await textbookApi.next(textbookId)
+        if (step.done) break
+      }
+
+      const r = await textbookApi.get(courseId)
+      setBook(r.textbook)
+      if (r.textbook?.status === 'ready') {
+        setPhase('done')
+      } else {
+        setErr('书还没写完，去「教材」页可以接着往下写')
+        setPhase('confirm')
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : '开始生成失败')
       setPhase('confirm')
+    } finally {
+      if (poll) clearInterval(poll)
     }
   }
 

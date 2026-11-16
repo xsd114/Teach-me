@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Schema v1 —— ALP 的全部核心表。
  *
  * 规则：
@@ -438,6 +438,19 @@ export const MIGRATIONS: Migration[] = [
     sql: /* sql */ `
     -- 重点标记什么时候被 AI 归纳进记忆库的；NULL = 还没
     ALTER TABLE annotation ADD COLUMN digested_at TEXT;
+    `,
+  },
+  {
+    version: 11,
+    name: 'chapter-stepwise',
+    sql: /* sql */ `
+    -- 一章一生成：规划阶段先把章节骨架建出来（pending），写完一章才置 done，失败置 failed。
+    -- 老数据都是已写完的章，默认 'done' 正好对得上。
+    ALTER TABLE textbook_chapter ADD COLUMN status TEXT NOT NULL DEFAULT 'done';
+
+    -- 规划阶段整理好的资料摘要（书名 + 章节 + 片段）。原来只活在内存里，
+    -- 拆成一章一个请求后每次写章都要用它，所以落库。
+    ALTER TABLE textbook ADD COLUMN sources_block TEXT NOT NULL DEFAULT '';
     `,
   },
 ]
